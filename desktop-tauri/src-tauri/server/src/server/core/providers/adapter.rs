@@ -1170,6 +1170,10 @@ pub fn adapter_for(kind: ProviderKind) -> &'static dyn ProviderAdapter {
         // （见 `chatglm/mod.rs` 与 `protocol::chatglm_stream` 的模块头）。
         // 它是本项目**唯一**「访客免登录即可用」的一家（`guest/access` 换证）。
         ProviderKind::Chatglm => &super::chatglm::CHATGLM_ADAPTER,
+        // LobsterAI（网易有道「有道龙虾」）：无状态 OpenAI 兼容转发（上游只收
+        // SSE，网关恒以 stream:true 请求）+ 目录 / 积分 / 签到 + loopback 网页登录。
+        // 三个载荷点见 `lobsterai/mod.rs` 的模块头
+        ProviderKind::LobsterAi => &super::lobsterai::LOBSTERAI_ADAPTER,
     }
 }
 
@@ -1273,6 +1277,9 @@ pub fn implemented_kinds() -> Vec<ProviderKind> {
         // 且有远程目录（`operation/detail?tag=available_models`）—— 必须在
         // 列表里，否则目录刷新循环不会问它（与 Trae / Loomy / Kuku 同一理由）。
         ProviderKind::Chatglm,
+        // LobsterAI：远程目录（`GET /api/models/available`）+ 有转发能力，
+        // 进本列表才会被后台目录刷新调度
+        ProviderKind::LobsterAi,
     ]
 }
 

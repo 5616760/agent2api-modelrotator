@@ -109,6 +109,9 @@ pub const SCOPE_OFFICEACE: &str = "officeace";
 /// 智谱清言（`chatglm.cn`）的模型目录缓存槽
 pub const SCOPE_CHATGLM: &str = "chatglm";
 
+/// LobsterAI（网易有道「有道龙虾」）的模型目录缓存槽
+pub const SCOPE_LOBSTERAI: &str = "lobsterai";
+
 /// 全部 scope（事实来源：`cached_scopes` 按它遍历；新增一家时加在这里）。
 pub const ALL_SCOPES: &[&str] = &[
     SCOPE_WORKBUDDY,
@@ -131,6 +134,7 @@ pub const ALL_SCOPES: &[&str] = &[
     SCOPE_ANTIGRAVITY,
     SCOPE_OFFICEACE,
     SCOPE_CHATGLM,
+    SCOPE_LOBSTERAI,
 ];
 
 /// 一份清单缓存

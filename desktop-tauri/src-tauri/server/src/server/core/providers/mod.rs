@@ -139,6 +139,7 @@ pub mod content_block;
 /// 自定义家走独立通道」的两条路径。
 pub mod custom;
 pub mod kuku;
+pub mod lobsterai;
 pub mod loomy;
 /// MonkeyCode（长亭科技的开源 AI 开发平台）。适配实现在 `monkeycode/`：
 /// 账号管理（粘贴 session）+ 模型目录（`GET /api/v1/users/models`）+
@@ -502,6 +503,38 @@ pub enum ProviderKind {
     /// 智谱清言这一家只有 `chatglm.cn` 一个站点（测试域 `test.chatglm.cn`
     /// 是**环境**不是地区，靠 `CHATGLM_BASE_URL` 覆盖即可）。
     Chatglm,
+    /// AtomCode（AtomGit / GitCode 的编码 Agent，`atomcode.atomgit.com`）。
+    ///
+    /// ── 上游长什么样（官方 Rust CLI + 本地 Go 参考实现，见 `atomcode/` 各模块头）──
+    /// 三条平面：登录代理 `acs.atomgit.com`（浏览器 OAuth，**回调不回到本机**，
+    /// 靠轮询判完成）、CodingPlan REST `api.gitcode.com/api/v5`（目录 / 套餐 /
+    /// 领取 / 用量）、聊天网关 `api-ai.gitcode.com/v1`（**OpenAI Chat
+    /// Completions 原生**）。
+    ///
+    /// ── 三个与别家不同的硬事实（每一条都能让整条链路静默失效）────────
+    /// 1. 网关**刻意不用官方默认的 `llm-api.atomgit.com/v1`**：那个要求闭源
+    ///    请求签名，而网关是**按 User-Agent** 决定要不要签名的（自称
+    ///    `atomcode/<ver>` 立刻 `403 ATOMCODE_SIG_MISSING`）。见
+    ///    `atomcode::endpoints` 的实测表。
+    /// 2. 令牌**不是 JWT**：过期只能由 `created_at + expires_in` 推；
+    ///    续期会**轮换** refresh token（必须单飞且必须写回）。
+    /// 3. 网关把失败包装成成功：`HTTP 200` + 正文 `参数错误`（或一页上游 HTML
+    /// LobsterAI（网易有道「有道龙虾」，`lobsterai.youdao.com`）。适配实现在
+    /// `lobsterai/`：账号管理（浏览器登录落于本机 loopback 回调）+ **无状态
+    /// 转发** + 目录 + 积分余额 + 每日签到。
+    ///
+    /// ── 上游长什么样（Go 参考 + TS 原版，见 `lobsterai/` 各模块头）──
+    /// 对话端点是 **OpenAI 兼容的原生协议**（`POST /api/proxy/v1/chat/completions`），
+    /// **只收 SSE**（`stream:false` 回 HTTP 500）—— 本网关的转发入口恒以
+    /// `stream:true` 请求上游，这条天然满足。**没有任何签名**，纯 Bearer。
+    ///
+    /// ── 三个载荷点 ────────────────────────────────────────────
+    /// ① 两个 `X-LobsterAI-Client-*` 头按能力过滤：少了 `kimi-k3-agentic-v1`
+    /// 目录里少一个模型，少了 `thinking-level-control-v1` 发
+    /// `reasoning_effort:"off"` 直接 500；② `uuid` 与两个 `keyfrom` 只在换码时
+    /// 下发、续期必须原样回传（丢了账号永远续不了期）；③ `developer` 角色上游
+    /// 回 502，出站要降级成 `system`。
+    LobsterAi,
 }
 
 /// 一个提供商的静态元数据。
@@ -604,6 +637,9 @@ pub const PROVIDERS: &[ProviderMeta] = &[
     // 大面积同名 —— 靠末位让同名模型优先归已有各家（那些是开放平台账号，
     // 配额与稳定性都比本家的消费级网页端好）。
     ProviderMeta { id: "chatglm", label: "智谱清言" },
+    // LobsterAI（网易有道「有道龙虾」）：单一入口（浏览器登录），没有地区伴生。
+    // 排在末尾（后到居后）。
+    ProviderMeta { id: "lobsterai", label: "LobsterAI" },
 ];
 
 /// provider id 在注册表里的下标（未知 id → None）。
@@ -689,6 +725,7 @@ pub fn kind_from_id(id: &str) -> Option<ProviderKind> {
         "officeace" => Some(ProviderKind::OfficeAce),
         "orcaterm" => Some(ProviderKind::OrcaTerm),
         "chatglm" => Some(ProviderKind::Chatglm),
+        "lobsterai" => Some(ProviderKind::LobsterAi),
         // 走到这里 = 上面的注册表判定已放行、这个 match 却没有对应分支：
         // 只可能是有人给 `PROVIDERS` 加了条目忘了加这里。开发期喊出来；
         // release 返回 None（见上：宁可为「未知」，不可误认成别家）。
@@ -732,6 +769,7 @@ pub const fn kind_id(kind: ProviderKind) -> &'static str {
         ProviderKind::OfficeAce => "officeace",
         ProviderKind::OrcaTerm => "orcaterm",
         ProviderKind::Chatglm => "chatglm",
+        ProviderKind::LobsterAi => "lobsterai",
     }
 }
 

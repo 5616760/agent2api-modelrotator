@@ -29,6 +29,7 @@
 
 mod accio;
 mod autoclaw;
+mod lobsterai;
 mod catpaw;
 pub mod codearts;
 mod qoder;
