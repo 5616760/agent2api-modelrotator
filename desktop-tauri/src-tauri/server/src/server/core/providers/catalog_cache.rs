@@ -119,6 +119,9 @@ pub const SCOPE_MODELSCOPE_CN: &str = "modelscopeCn";
 /// 见 `providers::modelscope::region` 的模块头）
 pub const SCOPE_MODELSCOPE_INTL: &str = "modelscopeIntl";
 
+/// LobsterAI（网易有道「有道龙虾」）的模型目录缓存槽
+pub const SCOPE_LOBSTERAI: &str = "lobsterai";
+
 /// 全部 scope（事实来源：`cached_scopes` 按它遍历；新增一家时加在这里）。
 pub const ALL_SCOPES: &[&str] = &[
     SCOPE_WORKBUDDY,
@@ -144,6 +147,7 @@ pub const ALL_SCOPES: &[&str] = &[
     SCOPE_MODELSCOPE_CN,
     SCOPE_MODELSCOPE_INTL,
     SCOPE_ATOMCODE,
+    SCOPE_LOBSTERAI,
 ];
 
 /// 一份清单缓存

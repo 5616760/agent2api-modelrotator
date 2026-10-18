@@ -1194,17 +1194,16 @@ pub fn adapter_for(kind: ProviderKind) -> &'static dyn ProviderAdapter {
         // （见 `chatglm/mod.rs` 与 `protocol::chatglm_stream` 的模块头）。
         // 它是本项目**唯一**「访客免登录即可用」的一家（`guest/access` 换证）。
         ProviderKind::Chatglm => &super::chatglm::CHATGLM_ADAPTER,
-        // ModelScope 的两个站点是两个 provider、两个实例（同一份实现的按地区
-        // 参数化，见 `modelscope::region` 与 `modelscope::mod` 的模块头）：
-        // 国内站打 `api-inference.modelscope.cn` / `modelscope.cn`，
-        // 国际站打 `.ai` 两个域 —— 打错了会拿到 401（实测），
-        // 所以这里 kind → region 必须逐字对应。
         ProviderKind::Modelscope => &super::modelscope::MODELSCOPE_ADAPTER,
         ProviderKind::ModelscopeIntl => &super::modelscope::MODELSCOPE_INTL_ADAPTER,
         // AtomCode（AtomGit / GitCode）：无状态 OpenAI 直通转发（上游本身就是
         // Chat Completions）+ 目录 / 额度 / 轮换续期。四个坑见 `atomcode/mod.rs`
         // 的模块头（网关按 UA 索签名、令牌非 JWT、续期轮换、失败被包装成 200）
         ProviderKind::Atomcode => &super::atomcode::ATOMCODE_ADAPTER,
+        // LobsterAI（网易有道「有道龙虾」）：无状态 OpenAI 兼容转发（上游只收
+        // SSE，网关恒以 stream:true 请求）+ 目录 / 积分 / 签到 + loopback 网页登录。
+        // 三个载荷点见 `lobsterai/mod.rs` 的模块头
+        ProviderKind::LobsterAi => &super::lobsterai::LOBSTERAI_ADAPTER,
     }
 }
 
@@ -1317,6 +1316,9 @@ pub fn implemented_kinds() -> Vec<ProviderKind> {
         // AtomCode：远程目录（`coding-plan/models-v2`）+ 有转发能力，
         // 进本列表才会被后台目录刷新调度
         ProviderKind::Atomcode,
+        // LobsterAI：远程目录（`GET /api/models/available`）+ 有转发能力，
+        // 进本列表才会被后台目录刷新调度
+        ProviderKind::LobsterAi,
     ]
 }
 
