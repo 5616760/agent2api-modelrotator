@@ -168,7 +168,14 @@ export type RequestPage = {
 }
 
 export function fetchRequests(
-  params: { offset?: number; limit?: number; status?: 'ok' | 'error'; model?: string; provider?: string },
+  params: {
+    offset?: number
+    limit?: number
+    /** 后端只认这三个值，其余忽略（见 report::normalize_status_filter） */
+    status?: 'ok' | 'error' | 'running'
+    model?: string
+    provider?: string
+  },
   signal?: AbortSignal,
 ): Promise<RequestPage> {
   const query = new URLSearchParams()
@@ -419,4 +426,91 @@ export function fetchAgents(signal?: AbortSignal): Promise<{ clients?: AgentClie
 
 export function restoreAgentClient(id: string): Promise<unknown> {
   return apiCall('/api/agents/restore', { method: 'POST', body: { id } })
+}
+
+/* ─── 账号余额 ─────────────────────────────── */
+
+export type UsageRow = {
+  id?: string
+  name?: string | null
+  /** 后端按家给不同形状；前端只读其中几个通用键，故用 Record */
+  usage?: Record<string, unknown> | null
+  error?: string | null
+  code?: string | number | null
+  /** 这一行的结论时刻（毫秒） */
+  at?: number
+}
+
+export type UsageSnapshot = {
+  /** 全部行里最新的结论时刻 */
+  at?: number
+  results?: UsageRow[]
+  skipped?: number
+}
+
+/** 最近一次查询结果的快照（只读记录表，不触发上游查询） */
+export function fetchUsageSnapshot(signal?: AbortSignal): Promise<UsageSnapshot> {
+  return apiCall<UsageSnapshot>('/api/accounts/usage/snapshot', { signal })
+}
+
+/** 手动查询单个账号余额（会真的打上游，可能慢） */
+export function fetchAccountUsage(id: string): Promise<{ results?: UsageRow[]; skipped?: number }> {
+  return apiCall<{ results?: UsageRow[]; skipped?: number }>(
+    `/api/accounts/usage?id=${encodeURIComponent(id)}`,
+  )
+}
+
+/** 改备注名（后端 PATCH 支持 name 字段，空串会被 400 拒绝） */
+export function renameAccount(id: string, name: string): Promise<unknown> {
+  return apiCall(`/api/accounts/${encodeURIComponent(id)}`, { method: 'PATCH', body: { name } })
+}
+
+/** 清除限流标记；不传 model = 清除该账号全部模型 */
+export function clearAccountRateLimits(id: string, model?: string): Promise<unknown> {
+  return apiCall(`/api/accounts/${encodeURIComponent(id)}/rate-limits/clear`, {
+    method: 'POST',
+    body: model ? { model } : {},
+  })
+}
+
+/** 把账号设为全局队列第一位（设为首选） */
+export function promoteAccount(id: string): Promise<unknown> {
+  return apiCall('/api/accounts/current', { method: 'POST', body: { id } })
+}
+
+/* ─── 签到记录 ─────────────────────────────── */
+
+export type CheckinRecordRow = {
+  rowId?: number
+  ts?: number
+  /** 北京时间的自然日 */
+  date?: string
+  /** schedule / startup / manual / single / activity */
+  source?: string
+  reason?: string
+  accountId?: string
+  accountName?: string
+  provider?: string
+  /** success / already / pending / failed */
+  outcome?: string
+  ok?: boolean
+  message?: string | null
+  error?: string | null
+  keptActive?: boolean
+}
+
+export type CheckinRecordPage = { records?: CheckinRecordRow[]; total?: number }
+
+export function fetchCheckinRecords(
+  params: { limit?: number; offset?: number; outcome?: string; provider?: string; keyword?: string; start?: number },
+  signal?: AbortSignal,
+): Promise<CheckinRecordPage> {
+  const query = new URLSearchParams()
+  if (params.offset) query.set('offset', String(params.offset))
+  query.set('limit', String(params.limit ?? 50))
+  if (params.outcome) query.set('outcome', params.outcome)
+  if (params.provider) query.set('provider', params.provider)
+  if (params.keyword) query.set('keyword', params.keyword)
+  if (params.start) query.set('start', String(params.start))
+  return apiCall<CheckinRecordPage>(`/api/checkin-records?${query.toString()}`, { signal })
 }

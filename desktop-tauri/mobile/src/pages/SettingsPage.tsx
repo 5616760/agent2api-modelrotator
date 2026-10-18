@@ -8,6 +8,7 @@ import { storeApiKey } from '../api/client'
 import { usePwa } from '../lib/usePwa'
 import { applyUpdate, promptInstall } from '../lib/pwa'
 import { apiBase, baseLabel } from '../lib/servers'
+import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
 
 /**
@@ -29,6 +30,9 @@ export function SettingsPage() {
   const currentLocale = locale()
   const options = localeOptions()
 
+  // 本页没有自己的列表请求：下拉只需重拉会话（网关状态来自它）
+  const pull = usePullToRefresh({ onRefresh: () => store.refresh(true) })
+
   const install = async () => {
     setInstalling(true)
     const outcome = await promptInstall()
@@ -48,7 +52,8 @@ export function SettingsPage() {
   }
 
   return (
-    <div className='m-page'>
+    <div className='m-page' ref={pull.bindRef}>
+      <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <PageIntro subtitle={t('外观 · 接入 · 关于')}
         actions={<IconButton name='refresh' label={t('刷新')} onClick={() => void store.refresh(true)} />}
       />
@@ -65,7 +70,9 @@ export function SettingsPage() {
               <div className='m-grow'>
                 <div className='m-t1'>{server?.name || baseLabel(server?.base || '')}</div>
                 <div className='m-t2 m-mono' style={{ fontSize: 11.5 }}>
-                  {servers.length > 1 ? t('{n} 台可选 · 点此切换', { n: servers.length }) : baseLabel(server?.base || '')}
+                  {servers.length > 1
+                    ? t('{n} 台可选 · 点此切换', { n: servers.length })
+                    : t('点此添加或切换服务器')}
                 </div>
               </div>
               <span className='m-chev'>

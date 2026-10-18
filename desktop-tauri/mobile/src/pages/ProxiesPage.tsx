@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { PageIntro, IconButton, Badge, Empty, ErrorNote, SkeletonList } from '../components/ui'
 import { GlyphLogo } from '../components/ProviderLogo'
 import { Icon } from '../components/Icon'
+import { PullIndicator, usePullToRefresh } from '../components/PullToRefresh'
 import { store } from '../state/store'
 import {
   fetchProxyPool,
@@ -41,6 +42,8 @@ export function ProxiesPage() {
   }
 
   usePolling(load, 120_000)
+
+  const pull = usePullToRefresh({ onRefresh: load })
 
   const items = data?.items || []
   const enabled = items.filter(item => item.enabled).length
@@ -99,7 +102,8 @@ export function ProxiesPage() {
   }
 
   return (
-    <div className='m-page'>
+    <div className='m-page' ref={pull.bindRef}>
+      <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <PageIntro actions={<IconButton name='refresh' label={t('刷新')} onClick={() => void load()} />}
       />
 

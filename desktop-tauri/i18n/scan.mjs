@@ -66,9 +66,9 @@ const DOMAIN_ORDER = [
  * 未命中的文件归入 'common' 并在报告里 warning（提示把新文件登记进来）。
  */
 const DOMAIN_RULES = [
-  { domain: 'common', files: ['index.html', 'm.html', 'titlebar.js', 'tooltip.js', 'clipboard.js', 'filter-memory.js', 'app.js', 'confirm-dialog.tsx', 'input.tsx', 'input-control.tsx', 'segmented.tsx', 'index.tsx', 'markdown.js', 'icons.js', 'App.tsx', 'main.tsx', 'Shell.tsx', 'NavBar.tsx', 'Icon.tsx', 'ProviderLogo.tsx', 'ui.tsx', 'i18n.ts', 'client.ts', 'gateway.ts', 'format.ts', 'providers.ts', 'providerFacts.ts', 'usePolling.ts', 'pwa.ts', 'usePwa.ts', 'servers.ts', 'auth.ts', 'store.ts'] },
+  { domain: 'common', files: ['index.html', 'm.html', 'titlebar.js', 'tooltip.js', 'clipboard.js', 'filter-memory.js', 'app.js', 'confirm-dialog.tsx', 'input.tsx', 'input-control.tsx', 'segmented.tsx', 'index.tsx', 'markdown.js', 'icons.js', 'App.tsx', 'main.tsx', 'Shell.tsx', 'NavBar.tsx', 'Icon.tsx', 'ProviderLogo.tsx', 'ui.tsx', 'PullToRefresh.tsx', 'i18n.ts', 'client.ts', 'gateway.ts', 'format.ts', 'providers.ts', 'providerFacts.ts', 'usePolling.ts', 'pwa.ts', 'usePwa.ts', 'servers.ts', 'auth.ts', 'store.ts'] },
   { domain: 'login', files: ['login.html', 'login-page.tsx', 'panel-captcha.js'] },
-  { domain: 'accounts', files: ['accounts-page.tsx', 'AccountsPage.tsx', 'AccountSheet.tsx', 'accounts-shared.ts', 'accounts-columns.ts', 'accounts-store.ts', 'accounts-panels.tsx', 'accounts-queue-drag.ts', 'accounts-dialogs.tsx', 'accounts-dialog-limiter.tsx', 'accounts-dialog-usage.tsx', 'accounts-credit-detail.tsx', 'accounts-limit-detail.tsx', 'accounts-data.ts', 'accounts-domain.ts', 'zcode-plans-modal.tsx', 'balance-query.tsx'] },
+  { domain: 'accounts', files: ['accounts-page.tsx', 'AccountsPage.tsx', 'AccountSheet.tsx', 'accounts-shared.ts', 'accounts-columns.ts', 'accounts-store.ts', 'accounts-panels.tsx', 'accounts-queue-drag.ts', 'accounts-dialogs.tsx', 'accounts-dialog-limiter.tsx', 'accounts-dialog-usage.tsx', 'accounts-credit-detail.tsx', 'accounts-limit-detail.tsx', 'accounts-data.ts', 'accounts-domain.ts', 'usage.ts', 'zcode-plans-modal.tsx', 'balance-query.tsx'] },
   { domain: 'add-account', files: ['add-custom-provider.tsx', 'custom-provider-ui.js', 'providers.js', 'preset-providers.js', 'web-login.js', 'sms-login.js', 'autoclaw-oauth.js', 'aliyun-captcha.js', 'zcode-claim.js', 'zcode-captcha-pool.js', 'codearts-welfare.js'], prefixes: ['add-account-', 'add-provider-'] },
   { domain: 'models', files: ['ModelsPage.tsx', 'model-capability.ts', 'model-capability-dialog.tsx', 'model-test-dialog.tsx'], prefixes: ['models-'] },
   // 「Agent」页：本机 AI 客户端的配置接管（客户端清单 / 配置编辑 / 写入预览）
@@ -82,7 +82,7 @@ const DOMAIN_RULES = [
   { domain: 'proxies', files: ['ProxiesPage.tsx', 'proxies-page.tsx', 'proxies-columns.ts', 'proxies-state.ts', 'proxies-dialogs.tsx', 'proxies-sub-state.ts', 'proxies-sub-view.tsx', 'proxies-kernel-dialog.tsx', 'sponsor.ts'] },
   { domain: 'docs', files: ['docs-page.tsx', 'DocsPage.tsx'] },
   { domain: 'report', files: ['report-page.tsx', 'report-charts.ts', 'ReportPage.tsx', 'HomePage.tsx'] },
-  { domain: 'checkin', files: ['CheckinPage.tsx', 'checkin-page.tsx', 'checkin-state.ts', 'checkin-schedule-tab.tsx', 'checkin-records-tab.tsx', 'checkin-schedules-state.ts'] },
+  { domain: 'checkin', files: ['CheckinPage.tsx', 'CheckinRecordsPage.tsx', 'checkin-page.tsx', 'checkin-state.ts', 'checkin-schedule-tab.tsx', 'checkin-records-tab.tsx', 'checkin-schedules-state.ts'] },
   { domain: 'tasks', files: ['tasks-panel.tsx', 'TasksPage.tsx'] },
   { domain: 'logs', files: ['logs-panel.tsx', 'LogsPage.tsx'] },
   { domain: 'requests', files: ['RequestsPage.tsx', 'requests-page.tsx', 'request-detail.tsx', 'request-hover.tsx', 'request-clear-modal.tsx', 'conversation-preview.js'] },

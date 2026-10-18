@@ -265,16 +265,16 @@ A primeira visita redireciona para a página de login; entre com o administrador
 
 Na primeira execução aparece uma tela "Servidores". São três passos:
 
-1. Toque em "Adicionar" e informe o `IP:porta` do gateway (por exemplo `192.168.1.23:3065`; a porta padrão é 3065);
+1. Toque em "Adicionar" e informe o `IP ou domínio:porta` do gateway (por exemplo `192.168.1.23:3065`). O protocolo pode ser `http://` ou `https://` (http é assumido se omitido); sem porta, http usa 3065 e https usa a 443 padrão;
 2. Toque em "Conectar e salvar" — ele testa o gateway antes, então endereço errado ou gateway sem acesso pela rede local são reportados ali mesmo;
 3. Aparece a página de login. Informe a conta de administrador e a senha deste gateway (se ainda não houver administrador, vira "Criar conta de administrador").
 
-**Vários servidores**: toque em "Adicionar" de novo. Cada servidor guarda o próprio login — trocar não exige entrar de novo, e voltar também não. O ponto de entrada é "Configurações → Servidores"; toque em uma linha para trocar.
+**Vários servidores**: toque em "Adicionar" de novo. Cada servidor guarda o próprio login — trocar não exige entrar de novo, e voltar também não. O ponto de entrada é "Configurações → Servidores"; toque em uma linha para trocar. **A página de login também tem "Trocar de servidor"**, então depois de sair da conta (ou ser desconectado) você não precisa entrar de novo só para chegar a essa lista.
 
 **Limitações conhecidas do APK**:
 
 - Apenas Android. O iOS exige uma conta Apple Developer para assinar, ou instalação pelo Xcode (assinaturas de sideload expiram em 7 dias).
-- Fala com endereços `http://` da rede local em texto claro. O risco é "interceptável na mesma rede local"; o gateway em si continua exigindo login de administrador. Para eliminar, configure TLS no gateway e informe um endereço `https://` (a análise é a mesma, apenas não prefixa `http`).
+- Sem protocolo explícito, fala com endereços `http://` da rede local em texto claro. O risco é "interceptável na mesma rede local"; o gateway em si continua exigindo login de administrador. Para eliminar, configure TLS no gateway (um proxy reverso ou túnel serve) e informe um endereço `https://` — o protocolo é preservado como digitado, e um certificado inválido faz o teste de conexão falhar na hora.
 - A interface segue a versão do APK, não a do gateway. Se uma atualização do gateway adicionar telas novas, é preciso um APK mais novo para vê-las; mudanças apenas de dados não são afetadas.
 
 ### Adicionar à tela inicial (navegador / PWA)

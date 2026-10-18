@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Icon } from '../components/Icon'
 import { useStore, store } from '../state/store'
+import { activeLimits } from '../lib/format'
 import { t } from '../i18n'
 
 /**
@@ -66,7 +67,16 @@ export function AssistantPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '10px 14px 10px', flex: 'none' }}>
+      {/*
+        页头必须自己吃下安全区：其他一级页用 `.m-head`，那里带了
+        `calc(var(--m-safe-t) + …)`；这一页是手写的紧凑头（对话页要省纵向空间），
+        漏了 safe-t 就会被刘海 / 状态栏压住。离线时顶部那条通知自己占安全区，
+        这里再让一次会多出一段空白 —— 与 `.m-app[data-offline] .m-head` 同口径。
+      */}
+      <div
+        className='m-assistant-head'
+        style={{ display: 'flex', alignItems: 'center', gap: 9, flex: 'none' }}
+      >
         <div style={{ flex: 1, minWidth: 0 }}>
           <b style={{ fontSize: 15 }}>{t('AI 助手')}</b>
           <span style={{ display: 'block', fontSize: 11, color: 'var(--m-text-3)', marginTop: 1 }}>
@@ -230,7 +240,9 @@ export function AssistantPage() {
       <div
         style={{
           flex: 'none',
-          padding: '8px 12px calc(12px + var(--m-safe-b))',
+          // 不再加 safe-b：底部标签栏（.m-tabbar）是它的兄弟节点，已经用
+          // padding-bottom 吃掉了底部安全区。这里再加一次会多出一条空白。
+          padding: '8px 12px 12px',
           borderTop: '1px solid var(--m-line)',
           background: 'color-mix(in srgb, var(--m-bg) 88%, transparent)',
           backdropFilter: 'blur(12px)',
@@ -402,9 +414,10 @@ async function answer(key: string, state: ReturnType<typeof useStore>): Promise<
 
   if (key === 'limited') {
     const data = await fetchAccounts()
-    const limited = (data.accounts || []).filter(
-      item => item.enabled && item.rateLimits && Object.keys(item.rateLimits).length,
-    )
+    const limited = (data.accounts || [])
+      .filter(item => item.enabled)
+      .map(item => ({ account: item, limits: activeLimits(item) }))
+      .filter(entry => entry.limits.length > 0)
     if (!limited.length) {
       return [{ role: 'assistant', text: t('现在没有账号被限流。') }]
     }
@@ -412,9 +425,9 @@ async function answer(key: string, state: ReturnType<typeof useStore>): Promise<
       {
         role: 'assistant',
         text: t('{n} 个账号正在限流：', { n: limited.length }),
-        rows: limited.slice(0, 8).map(item => ({
-          label: (item.email || item.name || item.id) as string,
-          value: t('{n} 个模型', { n: Object.keys(item.rateLimits || {}).length }),
+        rows: limited.slice(0, 8).map(({ account, limits }) => ({
+          label: (account.email || account.name || account.id) as string,
+          value: t('{n} 个模型', { n: limits.length }),
         })),
       },
     ]

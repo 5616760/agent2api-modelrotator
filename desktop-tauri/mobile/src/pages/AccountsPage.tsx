@@ -4,11 +4,19 @@ import { ProviderLogo } from '../components/ProviderLogo'
 import { Icon } from '../components/Icon'
 import { AccountSheet } from './AccountSheet'
 import { useStore, store } from '../state/store'
-import { setAccountEnabled, type Account } from '../api/gateway'
-import { accountName, formatExpiry, formatRelative } from '../lib/format'
-import { expiryOf, hasExpiry } from '../lib/providerFacts'
+import {
+  fetchUsageSnapshot,
+  setAccountEnabled,
+  type Account,
+  type UsageRow,
+  type UsageSnapshot,
+} from '../api/gateway'
+import { accountName, formatExpiry, formatRelative, isRateLimited } from '../lib/format'
+import { expiryOf, hasExpiry, isLongLivedCredential, supportsUsage } from '../lib/providerFacts'
+import { usageIndex, usageText } from '../lib/usage'
 import { providerLabel } from '../lib/providers'
 import { usePolling } from '../lib/usePolling'
+import { usePullToRefresh, PullIndicator } from '../components/PullToRefresh'
 import { t } from '../i18n'
 
 /**
@@ -33,21 +41,31 @@ export function AccountsPage() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [usage, setUsage] = useState<UsageSnapshot | null>(null)
   const accounts = state.session?.accounts?.accounts || []
 
-  usePolling(async () => {
+  const load = async () => {
+    // 余额快照与账号刷新并行：快照失败不影响账号列表（余额查不到是常态，
+    // 静默降级成「未查询」，不弹 toast 也不进页内错误条）
+    void fetchUsageSnapshot()
+      .then(setUsage)
+      .catch(() => {})
     try {
       await store.refresh(true)
       setError('')
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
     }
-  }, 30_000)
+  }
+
+  usePolling(load, 30_000)
+
+  const pull = usePullToRefresh({ onRefresh: load })
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase()
     return accounts.filter(item => {
-      const limited = hasRateLimit(item)
+      const limited = isRateLimited(item)
       if (filter === 'enabled' && !item.enabled) return false
       if (filter === 'disabled' && item.enabled) return false
       if (filter === 'limited' && !limited) return false
@@ -77,8 +95,11 @@ export function AccountsPage() {
   }, [filtered])
 
   const enabledCount = accounts.filter(item => item.enabled).length
-  const limitedCount = accounts.filter(item => item.enabled && hasRateLimit(item)).length
+  const limitedCount = accounts.filter(item => item.enabled && isRateLimited(item)).length
   const disabledCount = accounts.filter(item => !item.enabled).length
+
+  // 快照行按 id 索引：每次 render 重建 Map 太浪费，且行组件会因此白白重渲
+  const usageById = useMemo(() => usageIndex(usage), [usage])
 
   const toggle = async (account: Account, next: boolean) => {
     setBusy(true)
@@ -96,7 +117,9 @@ export function AccountsPage() {
   const openAccount = openId ? accounts.find(item => item.id === openId) || null : null
 
   return (
-    <div className='m-page'>
+    <div className='m-page m-fixed' ref={pull.bindRef}>
+      <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
+      <div className='m-sticky'>
       <PageHead
         title={t('账号')}
         subtitle={t('{n} 个账号 · {e} 启用 · {l} 限流', { n: accounts.length, e: enabledCount, l: limitedCount })}
@@ -155,7 +178,10 @@ export function AccountsPage() {
         <FilterChip label={t('限流')} count={limitedCount} on={filter === 'limited'} onClick={() => setFilter('limited')} />
         <FilterChip label={t('禁用')} count={disabledCount} on={filter === 'disabled'} onClick={() => setFilter('disabled')} />
       </div>
+      </div>
 
+      {/* 只有这一块跟着手指滚：筛选条常驻，换筛选不用先滑回顶部 */}
+      <div className='m-body'>
       {error ? <ErrorNote text={error} /> : null}
       {!state.session && state.loading ? <SkeletonList rows={4} height={72} /> : null}
 
@@ -169,7 +195,7 @@ export function AccountsPage() {
 
       {groups.map(group => {
         const enabled = group.list.filter(item => item.enabled).length
-        const limited = group.list.filter(item => item.enabled && hasRateLimit(item)).length
+        const limited = group.list.filter(item => item.enabled && isRateLimited(item)).length
         return (
           <div key={group.provider} className='m-section' style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 3px 8px' }}>
@@ -188,6 +214,7 @@ export function AccountsPage() {
                   key={account.id}
                   account={account}
                   rank={index + 1}
+                  usageRow={usageById.get(account.id)}
                   onOpen={() => setOpenId(account.id)}
                   onToggle={next => void toggle(account, next)}
                   busy={busy}
@@ -219,6 +246,8 @@ export function AccountsPage() {
         </div>
       </div>
 
+      </div>
+
       <AccountSheet
         account={openAccount}
         onClose={() => setOpenId(null)}
@@ -231,6 +260,7 @@ export function AccountsPage() {
 function AccountRow({
   account,
   rank,
+  usageRow,
   onOpen,
   onToggle,
   busy,
@@ -238,11 +268,13 @@ function AccountRow({
   account: Account
   /** 组内序号（1 起）：后端 priority 是全局唯一队列里的绝对位次，手机上按组内序号读 */
   rank: number
+  /** 该账号在余额快照里的那一行；快照没有这个账号时是 undefined（= 未查询） */
+  usageRow?: UsageRow
   onOpen: () => void
   onToggle: (next: boolean) => void
   busy: boolean
 }) {
-  const limited = hasRateLimit(account)
+  const limited = isRateLimited(account)
   const expiresAt = expiryOf(account)
   const expired = expiresAt > 0 && expiresAt <= Date.now()
   const tone = !account.enabled
@@ -263,8 +295,20 @@ function AccountRow({
         : expired
           ? t('已过期')
           : t('正常')
-  // 有效期：这家没有这个概念时不显示，而不是显示「—」（少一行噪音）
-  const expiryText = hasExpiry(account.provider) ? formatExpiry(expiresAt) : ''
+  // 有效期：这家没有这个概念时不显示，而不是显示「—」（少一行噪音）；
+  // 长期有效的家写「长期有效」—— 与「—」（读不到到期时间）是两件事
+  const expiryText = isLongLivedCredential(account.provider)
+    ? t('长期有效')
+    : hasExpiry(account.provider) ? formatExpiry(expiresAt) : ''
+  // 余额：只有这家有查询能力时才占一行；快照里没有这一行 = 还没查过
+  const usageView = usageText(usageRow)
+  const showUsage = supportsUsage(account)
+  const usageColor =
+    usageView.kind === 'bad'
+      ? 'var(--m-danger)'
+      : usageView.kind === 'warn'
+        ? 'var(--m-warn)'
+        : 'var(--m-text-3)'
 
   return (
     <div
@@ -289,15 +333,34 @@ function AccountRow({
           <div style={{ fontSize: 13.5, fontWeight: 550, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {accountName(account)}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 11.5, color: 'var(--m-text-3)' }}>
-            <Badge tone={tone} dot>
-              {badgeText}
-            </Badge>
-            {expiryText ? (
-              <>
-                <span>·</span>
-                <span>{expiryText}</span>
-              </>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 11.5, color: 'var(--m-text-3)', minWidth: 0 }}>
+            {/* 状态 + 有效期这一截可以截断，余额读数不能被挤掉 */}
+            <span
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              <Badge tone={tone} dot>
+                {badgeText}
+              </Badge>
+              {expiryText ? (
+                <>
+                  <span>·</span>
+                  {/* 有效期这一截允许吃掉省略号，余额读数（flex:none）始终完整 */}
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {expiryText}
+                  </span>
+                </>
+              ) : null}
+            </span>
+            {showUsage ? (
+              <span style={{ flex: 'none', color: usageColor }}>· {usageView.text}</span>
             ) : null}
           </div>
         </div>
@@ -378,8 +441,4 @@ function SwitchSmall({
       />
     </button>
   )
-}
-
-function hasRateLimit(account: { rateLimits?: Record<string, unknown> }): boolean {
-  return Boolean(account.rateLimits && Object.keys(account.rateLimits).length)
 }

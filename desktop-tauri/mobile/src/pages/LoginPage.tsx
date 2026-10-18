@@ -5,7 +5,6 @@ import { authenticate, fetchPanelStatus, solveCaptcha } from '../api/auth'
 import { storeApiKey } from '../api/client'
 import { baseLabel } from '../lib/servers'
 import { t } from '../i18n'
-
 /**
  * 登录 / 首次注册（仅 APK）。
  *
@@ -26,7 +25,7 @@ import { t } from '../i18n'
  * 已作废，要重新求解。
  */
 export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: () => void }) {
-  const { server } = useStore()
+  const { server, packaged } = useStore()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [apiKey, setApiKey] = useState('')
@@ -277,6 +276,31 @@ export function LoginPage({ mode, onDone }: { mode: 'login' | 'key'; onDone?: ()
         >
           {busy ? t('验证中…') : mode === 'key' ? t('保存并继续') : setup ? t('创建并进入') : t('登录')}
         </button>
+
+        {/*
+          APK 里登录层是盖在主界面上的，用户被登出后看不到「设置 → 服务器」，
+          只能对着当前这台输密码。这里给一个直达入口：压进服务器页，选/加完
+          一台后它会自己退回原页，登录层按新服务器重新弹出来。
+        */}
+        {packaged ? (
+          <button
+            type='button'
+            disabled={busy}
+            onClick={() => store.push('servers')}
+            style={{
+              display: 'block',
+              width: '100%',
+              marginTop: 10,
+              padding: '8px 0',
+              border: 0,
+              background: 'none',
+              color: 'var(--m-primary)',
+              fontSize: 12.5,
+            }}
+          >
+            {t('换一台服务器')}
+          </button>
+        ) : null}
       </div>
     </div>
   )

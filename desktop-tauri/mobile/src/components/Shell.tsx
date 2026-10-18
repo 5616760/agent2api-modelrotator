@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Icon, type IconName } from './Icon'
 import { useStore, store } from '../state/store'
 import { LoginPage } from '../pages/LoginPage'
+import { isRateLimited } from '../lib/format'
 import { t } from '../i18n'
 
 /**
@@ -29,7 +30,7 @@ export function TabBar() {
   const state = useStore()
   const active = state.stack.length === 0 ? state.route.screen : ''
   if (!PRIMARY_SCREENS.has(state.route.screen) || state.stack.length > 0) return null
-  const limited = state.session?.accounts?.accounts?.filter(a => a.enabled && hasRateLimit(a)).length || 0
+  const limited = state.session?.accounts?.accounts?.filter(a => a.enabled && isRateLimited(a)).length || 0
   return (
     <nav className='m-tabbar' aria-label={t('主导航')}>
       {TABS.map(tab => (
@@ -48,10 +49,6 @@ export function TabBar() {
       ))}
     </nav>
   )
-}
-
-function hasRateLimit(account: { rateLimits?: Record<string, unknown> }): boolean {
-  return Boolean(account.rateLimits && Object.keys(account.rateLimits).length)
 }
 
 /** 轻提示 */
@@ -82,6 +79,14 @@ export function AuthGate() {
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   if (!state.authLost) return null
+
+  /**
+   * APK 里登录层是盖满全屏的，用户被登出后看不到「设置 → 服务器」。
+   * 登录页给了「换一台服务器」入口，它把用户压进服务器页 —— 这一屏必须让开，
+   * 否则遮罩盖住整个界面，列表点不到。authLost 故意不清：用户取消返回后
+   * 登录层会重新盖上来，换到新服务器也会按新地址重新弹。
+   */
+  if (state.packaged && state.route.screen === 'servers') return null
 
   // 打包形态走应用内登录页（login / key 两种模式它都覆盖）
   if (state.packaged) return <LoginPage mode={state.authLost} />

@@ -265,16 +265,16 @@ The first visit redirects to the login page; sign in with the panel administrato
 
 On first launch you get a "Servers" screen. Three steps:
 
-1. Tap "Add" and enter the gateway's `IP:port` (e.g. `192.168.1.23:3065`; the port defaults to 3065);
+1. Tap "Add" and enter the gateway's `IP or domain:port` (e.g. `192.168.1.23:3065`). The scheme may be `http://` or `https://` (http is assumed if omitted); without a port, http gets 3065 and https uses the standard 443;
 2. Tap "Connect & save" — it probes the gateway first, so a wrong address or a gateway without LAN access is reported right there;
 3. A login page appears. Enter this gateway's administrator account and password (if none exists yet, it becomes "Create admin account").
 
-**Multiple servers**: tap "Add" again. Each server keeps its own sign-in — switching over does not require signing in again, and neither does switching back. The entry point is "Settings → Servers"; tap a row to switch to it.
+**Multiple servers**: tap "Add" again. Each server keeps its own sign-in — switching over does not require signing in again, and neither does switching back. The entry point is "Settings → Servers"; tap a row to switch to it. **The login page also has a "Switch server" link**, so after signing out (or being signed out) you don't have to log in first just to reach that list.
 
 **Known limitations of the APK**:
 
 - Android only. iOS requires an Apple Developer account for signing, or installing via Xcode yourself (sideloaded signatures expire after 7 days).
-- It talks to `http://` LAN addresses in cleartext. The risk is "sniffable on the same LAN"; the gateway itself still requires administrator login. To remove it, give the gateway TLS and enter an `https://` address (the parsing is the same, it just will not prepend `http`).
+- Without a scheme it uses a cleartext `http://` LAN address. The risk is "sniffable on the same LAN"; the gateway itself still requires administrator login. To remove it, give the gateway TLS (a reverse proxy or tunnel works) and enter an `https://` address — the scheme is preserved as typed, and an invalid certificate makes the probe fail immediately.
 - The UI follows the APK version, not the gateway. If a gateway upgrade adds new screens, you need a newer APK to see them; pure data changes are unaffected.
 
 ### Add to home screen (browser / PWA)

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { PageIntro, IconButton, Badge, Empty, ErrorNote, SkeletonList } from '../components/ui'
 import { ProviderLogo, GlyphLogo } from '../components/ProviderLogo'
 import { Icon } from '../components/Icon'
+import { PullIndicator, usePullToRefresh } from '../components/PullToRefresh'
 import { store } from '../state/store'
 import { fetchCheckinCenter, runCheckin, type CheckinCenter } from '../api/gateway'
 import { formatRelative, formatStamp, isToday } from '../lib/format'
@@ -25,7 +26,7 @@ export function CheckinPage() {
   const [busy, setBusy] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
 
-  usePolling(async () => {
+  const load = async () => {
     try {
       const next = await fetchCheckinCenter()
       setData(next)
@@ -33,7 +34,11 @@ export function CheckinPage() {
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure))
     }
-  }, 60_000)
+  }
+
+  usePolling(load, 60_000)
+
+  const pull = usePullToRefresh({ onRefresh: load })
 
   const daily = data?.daily
   const providers = daily?.providers || []
@@ -56,15 +61,26 @@ export function CheckinPage() {
   }
 
   return (
-    <div className='m-page'>
+    <div className='m-page' ref={pull.bindRef}>
+      <PullIndicator pull={pull.pull} refreshing={pull.refreshing} />
       <PageIntro subtitle={t('今天 · 北京时间自然日')}
         actions={
-          <IconButton
-            name='refresh'
-            label={t('刷新')}
-            onClick={() => {
-              void fetchCheckinCenter().then(setData).catch(() => undefined)
-            }} />
+          <>
+            <button
+              type='button'
+              className='m-link'
+              style={{ fontSize: 12.5, color: 'var(--m-primary)', background: 'none', border: 0, padding: 0, flex: 'none' }}
+              onClick={() => store.push('checkin-records')}
+            >
+              {t('签到记录')}
+            </button>
+            <IconButton
+              name='refresh'
+              label={t('刷新')}
+              onClick={() => {
+                void fetchCheckinCenter().then(setData).catch(() => undefined)
+              }} />
+          </>
         }
       />
 

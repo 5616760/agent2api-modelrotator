@@ -448,9 +448,18 @@ export function LimitsCell({ account, onClear }: {
  * 刷新响应都是 13 位毫秒），不归一时 `1791009732` 当毫秒读就是 1970-01-21，账号一进
  * 面板就红着显示「已过期」。归一规则与理由写在 accounts-domain.ts 那一处，
  * 后端 `providers::trae::Credential::expires_at_ms` 是同一个口径。
+ *
+ * ── 「长期有效」与「—」是两件事 ────────────────────────────
+ * 主凭证本来就没有到期时刻的家（Antigravity 的 Google refresh token、智谱清言、
+ * ModelScope、Command Code）显示「长期有效」—— 它回答的是「要不要担心过期」。
+ * 而「—」只表示「这条记录里读不到到期时间」（KukuAI 的 BDUSS 就是这种：读不出
+ * 时刻，但上游随时可能作废）。判据是能力表的 `longLived` 位，不是「字段为空」。
  */
 export function ExpiryCell({ account }: { account: AccountRecord }) {
   const features = providerFeatures(providerOf(account))
+  if (features.longLived) {
+    return <span title={t('主凭证没有固定到期时刻，到期由网关自动续期或本来就不会过期')}>{t('长期有效')}</span>
+  }
   const expiresAt = expiryMillis(features.edition ? account.expiresAt : account[features.expiry])
   if (!expiresAt) return <span className='muted' title={t('记录里没有过期时间')}>—</span>
   const left = expiresAt - Date.now()

@@ -44,6 +44,22 @@ type ProviderFeatures = {
   identifier: string
   /** 有效期落在记录里的哪个键（expiresAt / tokenExpiresAt） */
   expiry: string
+  /**
+   * 主凭证**长期有效**（没有固定到期时刻）：有效期列显示「长期有效」。
+   *
+   * 与 `expiry: ''` 的区别是**语义**而不是排版：`expiry: ''` 只说「这一列没有
+   * 可读的字段」，读起来像「记录里缺数据」；`longLived: true` 是明确断言
+   * 「凭证不会到期，不必关心有效期」。两者都让 `tokenExpiryOf` 返回 0。
+   *
+   * 判据只认上游事实，两类可以登记：
+   *   1. 主凭证不过期、短期 access token 由网关自动续期 —— Antigravity 的
+   *      Google refresh token、智谱清言的 refresh token；
+   *   2. 令牌本身没有有效期概念 —— ModelScope 的 `ms-` 令牌、Command Code 的
+   *      `user_` key。
+   * **别把「无续期、只能重登」的家放进来**（Loomy 14 天 / MonkeyCode 30 天 /
+   * CatPaw 会话 Cookie）：它们的凭证有固定寿命，只是过期后救不回来。
+   */
+  longLived?: boolean
   /** 「这家的账号以邮箱报名字」（Qoder / AutoClaw 国际版 / Accio）。两处消费：
    *  displayNameOf（**未设备注**账号的主名口径，设过备注的以备注名为主）与
    *  models-fetch-modal 的 accountLabel（拉取模型的账号下拉） */
@@ -205,8 +221,10 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   // `edition: false` —— 单一入口（粘贴 Cookie / 导入本机登录态 / 网页登录），
   //   没有国际版。
   // `identifier: 'uid'` —— 账号标识存 uid（userreport 的 uk）。
-  // `expiry: ''` —— BDUSS 没有过期时间字段（无刷新接口，过期只能重登，
-  //   这一列对它是空，界面不渲染「有效期」）。
+  // `expiry: ''`（**不登记 longLived**）—— BDUSS 是登录态 Cookie，没有可读的
+  //   到期时刻；但**不能**写成「长期有效」：上游随时可能让它失效（参考实现的
+  //   故障排查里「BDUSS invalid」是最常见的一条），而且本家没有续期接口，
+  //   失效只能重登。这一列对它是「没有可显示的事实」，不是「不会过期」。
   kuku: { usage: true, edition: false, identifier: 'uid', expiry: '' },
   // OfficeAce（华为云果办 / OfficeClaw）。各位各有出处：
   // `usage: true` —— 额度/积分要**控制面签名**（V11-HMAC-SHA256 打 `/v1/subscription`），
@@ -234,9 +252,11 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   //   悬停提示逐条列出全名与重置时刻，另带订阅档徽标（Pro / Ultra / Free）。
   // `edition: false` —— 单一入口（Google OAuth 粘贴 / 网页登录），没有地区概念。
   // `identifier: 'userId'` —— 身份键存的就是 email（见 account_store::antigravity_accounts 模块头）。
-  // `expiry: ''` —— refresh token 不过期、access token 自动续期，这一列对它没有可显示的事实
-  //   （与 kuku 同一处置：界面不渲染「有效期」）。
-  antigravity: { usage: true, edition: false, identifier: 'userId', expiry: '' },
+  // `expiry: ''` + `longLived: true` —— refresh token 不过期（Google 侧的
+  //   refresh token 没有固定寿命，只在撤销授权 / 连续 6 个月不用 / 撞上同一
+  //   client 的 100 个上限时才失效），access token 约 1 小时、由网关提前
+  //   15 分钟自动续期（见 providers::antigravity::credentials 的模块头）。
+  antigravity: { usage: true, edition: false, identifier: 'userId', expiry: '', longLived: true },
   // 智谱清言（chatglm.cn）。各位各有出处：
   // `usage: true` —— 余额是**会员积分**（`member-api` 的活动状态 `current_score`，
   //   外加 `payment-api` 的会员档位），见后端 `providers::chatglm::balance`。
@@ -247,9 +267,13 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   // `edition: false` —— 单一站点（国际站是另一个产品 Z.AI/ZCode，已按独立 provider
   //   建模），本家没有地区/版本之分。
   // `identifier: 'uid'` —— 账号标识存 uid（JWT 的 `uid` 声明；访客也有）。
-  // `expiry: ''` —— 令牌有效期写在 JWT 的 `exp` 里、由网关自动续期，这一列没有
-  //   可显示的事实（与 antigravity / kuku 同一处置），界面不渲染「有效期」。
-  chatglm: { usage: true, creditDetail: true, edition: false, identifier: 'uid', expiry: '' },
+  // `expiry: ''` + `longLived: true` —— 登录账号的 refresh token 由网关自动
+  //   续期（`user/refresh` 实测可用），访客则由网关用**同一个设备号**重新
+  //   `guest/access` 换发，所以「什么时候到期」对用户没有行动价值。
+  //   ⚠️ 访客令牌本身有 7 天量级的寿命，换发后身份是否延续由上游决定（设备号
+  //   不变是网关能做的全部）；这里说的是「不需要用户操心有效期」，不是
+  //   「令牌永不过期」。
+  chatglm: { usage: true, creditDetail: true, edition: false, identifier: 'uid', expiry: '', longLived: true },
   // ModelScope（魔搭）的两个站点（`modelscope` / `modelscope-intl`）：两条同一份
   //   —— 账号字段、余额形态、签到链路两地完全一致，差别只在域名（那是转发与
   //   凭证层的事，这里不体现）。
@@ -260,10 +284,11 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   //   不需要再渲染一个地区列。
   // `identifier: 'userId'` —— 身份键存的是上游的 HavanaId
   //   （见 account_store::modelscope_accounts 模块头）。
-  // `expiry: ''` —— 令牌不过期、也没有过期时刻可算，这一列对它没有可显示的事实
-  //   （与 kuku / antigravity 同一处置：界面不渲染「有效期」）。
-  modelscope: { usage: true, creditDetail: true, edition: false, identifier: 'userId', expiry: '' },
-  'modelscope-intl': { usage: true, creditDetail: true, edition: false, identifier: 'userId', expiry: '' },
+  // `expiry: ''` + `longLived: true` —— `ms-` 令牌是长期有效的 API key
+  //   （插件源码原话「session 就是 api key 本身……永不过期」，实测也没有任何
+  //   refresh / renew 接口），没有到期时刻可算。
+  modelscope: { usage: true, creditDetail: true, edition: false, identifier: 'userId', expiry: '', longLived: true },
+  'modelscope-intl': { usage: true, creditDetail: true, edition: false, identifier: 'userId', expiry: '', longLived: true },
   // AtomCode（AtomGit / GitCode）。各位各有出处：
   // `usage: true` —— 额度是 `status-v2` 的**每窗口调用次数**（免费档实测 200 次 /
   //   5 小时），已接 `query_usage`（`providers/atomcode/usage.rs`），
@@ -273,6 +298,20 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   // `expiry: 'expiresAt'` —— 令牌**不是 JWT**，过期时刻由 `createdAt + expiresIn`
   //   推出后落盘（见 `providers/atomcode/credentials.rs` 的模块头）。
   atomcode: { usage: true, edition: false, identifier: 'userId', expiry: 'expiresAt' },
+  // Command Code（`api.commandcode.ai`）。此前**漏登记**，于是它掉进
+  // GENERIC_FEATURES：余额按钮不显示（后端 `supports_usage` 本来就是 false，
+  // 那一项是巧合对上了）、标识字段按 `userId` 读成空（本家公开形态里没有
+  // userId，账号 id 是 key 的哈希），有效期列还会去读一个永远不存在的
+  // `tokenExpiresAt`。
+  // `usage: false` —— 本家**没有余额查询**：`/alpha/billing/*` 只在添加账号时
+  //   用来探活（见 providers/commandcode/adapter.rs 的模块头），所以这里如实
+  //   关掉（与后端 `supports_usage` 的默认 false 同一口径）。
+  // `identifier: 'id'` —— 没有可读的用户标识：账号 id 由 key 的 SHA-256 前
+  //   12 位拼成（`commandcode-<hash>`，见 account_store::commandcode_accounts
+  //   的模块头），所以标识列显示这个 id 本身，与 officeace 同一处置。
+  // `expiry: ''` + `longLived: true` —— 单个静态 API Key，上游没有 refresh
+  //   接口、key 本身也没有到期时刻（见 credentials.rs 模块头）。
+  commandcode: { usage: false, edition: false, identifier: 'id', expiry: '', longLived: true },
   // LobsterAI（网易有道「有道龙虾」）。各位各有出处：
   // `usage: true` —— 余额是**积分**（`GET /api/user/profile-summary`，见后端
   //   `providers::lobsterai::endpoints` 的 `PROFILE_SUMMARY_PATH`），所以余额按钮
@@ -444,6 +483,18 @@ export function expiryMillis(value: unknown): number {
 export function tokenExpiryOf(account: AccountRecord | null | undefined): number {
   const key = providerFeatures(providerOf(account)).expiry
   return expiryMillis(account?.[key])
+}
+
+/**
+ * 这家的主凭证是不是**长期有效**（没有固定到期时刻，见 `ProviderFeatures.longLived`）。
+ *
+ * 有效期列据此把「—」换成「长期有效」：两者在界面上是**两件事** ——
+ * 「—」读作「这条记录里没有到期时间」（可能是数据缺失），而长期有效是
+ * 「本来就没有到期这回事」。只按 `expiry` 是否为空串判断做不到这个区分：
+ * KukuAI 也是空串，但它的 BDUSS 会被上游作废、只是读不出时刻。
+ */
+export function isLongLivedCredential(account: AccountRecord | null | undefined): boolean {
+  return providerFeatures(providerOf(account)).longLived === true
 }
 
 /**

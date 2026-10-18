@@ -87,6 +87,7 @@
   "活跃天数": "Active days",
   "活跃热力图": "Activity heatmap",
   "管理": "",
+  "累计请求 {n} 条": "{n} requests in total",
   "结束日期": "End date",
   "结束日期（含当天）": "End date (inclusive)",
   "统计区间加载中": "",
