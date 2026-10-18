@@ -65,6 +65,18 @@ pub struct AtomcodeAdapter;
 pub static ATOMCODE_ADAPTER: AtomcodeAdapter = AtomcodeAdapter;
 
 impl ProviderAdapter for AtomcodeAdapter {
+    /// 本家把**配额耗尽**包装成一次正常答复（见 trait 上 `stream_refusal_markers` 的说明）：
+    /// `200` + 一条 SSE 内容帧、正文是「模型「xxx」在当前 CodingPlan 用量窗口内已达上限。
+    /// 当前滚动窗口约在当日 HH:MM 结束并重置额度，请稍后重试。」、`finish_reason` 不存在，
+    /// 随后 `[DONE]`。2026-10-18 在 dev 上逐字抓过（客户端侧 426 字节）。
+    ///
+    /// 只写**实测见过的那半句**（稳定部分，模型名在「」里会变，所以从「在当前」起截）。
+    /// 命中后编排层按**配额**处置：罚账号（冷却到文案里的窗口重置时刻）+ 换家 ——
+    /// 与内容策略拒绝的「不罚账号」是两条路。
+    fn stream_refusal_markers(&self) -> &'static [&'static str] {
+        &["在当前 CodingPlan 用量窗口内已达上限"]
+    }
+
     fn kind(&self) -> ProviderKind {
         ProviderKind::Atomcode
     }

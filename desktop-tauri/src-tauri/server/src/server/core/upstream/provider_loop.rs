@@ -1538,22 +1538,67 @@ async fn attempt_queue(
         // 字节 + 剩余流重建）。用枚举而不是 `Option`，是为了让 `response` 在**恰好
         // 一支**里被移动 —— 否则借用检查器无法证明「None 那支没被移走」。
         let refusal_finishes = adapter.stream_refusal_finishes();
-        let gate = if !refusal_finishes.is_empty()
+        // 正文拒绝标记（见 `ProviderAdapter::stream_refusal_markers`）：有些上游把
+        // **配额耗尽**写成一次 200 + 正常正文，`finish_reason` 干脆不存在 ——
+        // 只看状态码与 `finish_reason` 会把它当成一次成功答复（账号不冷却、不换家）。
+        let refusal_markers = adapter.stream_refusal_markers();
+        let gate = if (!refusal_finishes.is_empty() || !refusal_markers.is_empty())
             && response_protocol == crate::server::core::providers::adapter::UpstreamResponse::Chat
             && response.status().is_success()
         {
             let head = refusal::hold_head(response).await;
-            if let Some(finish) = head.finish_reason.as_deref() {
-                if refusal::is_refusal(refusal_finishes, finish) {
-                    let message = format!(
-                        "上游拒答（finish_reason={finish}，疑似内容策略拦截）：本次答复不采纳"
-                    );
+            // 两条判据汇成一个三元组 `(给明细的文案, 是不是配额型, 给客户端标签)`：
+            //   · 配额型（**正文标记**命中）⇒ **罚账号**（冷却到正文里的窗口重置时刻）+ 换家；
+            //   · 内容型（`finish_reason` 命中）⇒ 不罚账号（内容问题，换谁都会拒）+ 换家。
+            let refusal_hit =
+                match refusal::matched_refusal_marker(&head.buffered, refusal_markers) {
+                    Some(marker) => Some((
+                        format!("上游以正文拒绝本次答复（命中标记「{marker}」）：本次答复不采纳"),
+                        true,
+                        "命中正文配额标记".to_string(),
+                    )),
+                    None => head
+                        .finish_reason
+                        .as_deref()
+                        .filter(|finish| refusal::is_refusal(refusal_finishes, finish))
+                        .map(|finish| {
+                            (
+                                format!("上游拒答（finish_reason={finish}，疑似内容策略拦截）：本次答复不采纳"),
+                                false,
+                                format!("finish_reason={finish}"),
+                            )
+                        }),
+                };
+            if let Some((message, is_quota, refusal_label)) = refusal_hit {
+                    // 配额型：这一家的额度用完了 ⇒ 罚账号。冷却时长交给
+                    // `mark_account_limited` 的文本兜底去解析正文里的窗口重置时刻
+                    // （「…当前滚动窗口约在当日 HH:MM 结束并重置额度…」）；解析不出时
+                    // 它自己的兜底是 10 分钟。
+                    if is_quota {
+                        if let Some(account_id) = &target.account_id {
+                            let reset_text = rotate::mark_account_limited(
+                                service,
+                                account_id,
+                                &model,
+                                429,
+                                None,
+                                None,
+                                &message,
+                            );
+                            logging::console_line(
+                                "[Upstream]",
+                                &format!(
+                                    "⚠️ {provider_id} 账号 {account_id} 配额拒绝（正文标记命中），已限流{reset_text}"
+                                ),
+                            );
+                        }
+                    }
                     ctx.telemetry.finish_last_attempt(Some(i64::from(head.status)), Some(&message));
                     logging::console_line(
                         "[Upstream]",
                         &format!(
-                            "⚠️ {provider_id} 对模型 {model_label} 返回拒答帧（finish_reason={finish}），\
-                             本家不采纳该答复"
+                            "⚠️ {provider_id} 对模型 {model_label} 以「{refusal_label}」拒绝本次答复，\
+                             本家不采纳"
                         ),
                     );
                     // 与其它失败同一落点：把这一轮记为失败、按队列顺延下一家。
@@ -1566,12 +1611,18 @@ async fn attempt_queue(
                             tried_ids.push(account_id);
                         }
                     }
-                    // 队列没人 / 换号次数用尽时给客户端的那句话：拒答本身不是
-                    // 网关坏了，要说清「换一家或改内容」这条路还在。
-                    let client_text = format!(
-                        "上游拒答（finish_reason={finish}）：该答复疑似被上游内容策略拦截，\
-                         且没有其他可用的账号或提供商可接管。请调整内容后重试，或在设置中更换该模型的服务商"
-                    );
+                    // 队列没人 / 换号次数用尽时给客户端的那句话：要说清是哪一类拒绝 ——
+                    // 内容型是「换一家或改内容」，配额型是「等窗口重置后重试」。
+                    let client_text = if is_quota {
+                        "上游配额拒绝（该账号的用量窗口已耗尽）：没有其他可用的账号或提供商可接管。\
+                         请在窗口重置后重试，或在设置中更换该模型的服务商"
+                            .to_string()
+                    } else {
+                        format!(
+                            "上游拒答（{refusal_label}）：该答复疑似被上游内容策略拦截，\
+                             且没有其他可用的账号或提供商可接管。请调整内容后重试，或在设置中更换该模型的服务商"
+                        )
+                    };
                     match rotate::pick_next_account(
                         service,
                         provider_ids,
@@ -1618,7 +1669,6 @@ async fn attempt_queue(
                         }
                         None => return Err(GatewayError::with_status(502, client_text)),
                     }
-                }
             }
             Gate::Held(head)
         } else {
