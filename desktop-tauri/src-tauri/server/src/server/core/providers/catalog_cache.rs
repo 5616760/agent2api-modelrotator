@@ -108,6 +108,8 @@ pub const SCOPE_OFFICEACE: &str = "officeace";
 
 /// 智谱清言（`chatglm.cn`）的模型目录缓存槽
 pub const SCOPE_CHATGLM: &str = "chatglm";
+/// AtomCode（AtomGit / GitCode）的模型目录缓存槽
+pub const SCOPE_ATOMCODE: &str = "atomcode";
 
 /// ModelScope（魔搭）**国内站**的模型目录缓存槽
 /// （`GET {推理域}/models`，OpenAI 格式目录）
@@ -141,6 +143,7 @@ pub const ALL_SCOPES: &[&str] = &[
     SCOPE_CHATGLM,
     SCOPE_MODELSCOPE_CN,
     SCOPE_MODELSCOPE_INTL,
+    SCOPE_ATOMCODE,
 ];
 
 /// 一份清单缓存

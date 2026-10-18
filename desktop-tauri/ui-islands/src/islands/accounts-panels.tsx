@@ -1781,11 +1781,8 @@ function LimitPanel({ account, onClose, onClear }: {
   const close = (
     <Button variant='ghost' size='icon-xs' className='panel-close' title={t('收起')} onClick={onClose}>✕</Button>
   )
-  if (!entries.length) {
-    // 已展开但记录恰好全部过期时给一句中性说明 —— 数据是两次读盘之间变了的，
-    // 不该渲染成一块空面板
-    return <div className='row-panel limit-panel'>{t('当前没有限流中的模型。')}{close}</div>
-  }
+  // 记录为空的面板画不出来（PanelsRow 那一层已经把行收掉了）：调用方保证
+  // 传进来的账号此刻至少有一条生效中的限流记录。
   return (
     <div className='row-panel limit-panel'>
       {close}
@@ -1816,6 +1813,15 @@ function LimitPanel({ account, onClose, onClear }: {
   )
 }
 
+/**
+ * 行下的明细面板承载行。展开态是 store 里那份 Map（页面读出来传进来），这里只负责画。
+ *
+ * **记录清空即收起**：面板开着的时候，「清除标记 / 全部清除」清掉最后一条、或那条冷却
+ * 恰好到期，都会让这个账号一条生效中的记录都不剩。此时限流列的徽章已经变回绿色
+ * 「正常」、不再是切换入口 —— 面板再留着，就只能是一块什么都没有、只剩关闭按钮的
+ * 空条。所以这里在记录为空时直接不画，并把 store 里的展开态同步收回来（不收的话，
+ * 这个账号下次再被限流会自动弹开，绕过了用户的点击）。
+ */
 export function PanelsRow({ account, colSpan, limitsOpen, onClear }: {
   account: AccountRecord
   colSpan: number
@@ -1823,7 +1829,11 @@ export function PanelsRow({ account, colSpan, limitsOpen, onClear }: {
   limitsOpen: boolean
   onClear: (id: string, model: string) => void
 }) {
-  if (!limitsOpen) return null
+  const empty = activeLimits(account).length === 0
+  React.useEffect(() => {
+    if (limitsOpen && empty) setPanelOpen(account.id, 'limits', false)
+  }, [limitsOpen, empty, account.id])
+  if (!limitsOpen || empty) return null
   return (
     <tr className='acct-panels' data-panels-for={account.id}>
       <td colSpan={colSpan}>

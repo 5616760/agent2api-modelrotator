@@ -105,6 +105,12 @@ pub mod accio;
 /// wire 格式，不止 Gemini）全部已接通；`is_stateful` 恒 false，
 /// 见 `antigravity/mod.rs`）。
 pub mod antigravity;
+/// AtomCode（AtomGit / GitCode）。适配实现在 `atomcode/`：账号管理（粘贴令牌对
+/// 或后续的浏览器登录）+ **无状态 OpenAI 直通转发**（上游本身就是 Chat
+/// Completions，`is_stateful` 恒 false）+ 目录（`coding-plan/models-v2`）+
+/// 额度（`status-v2` 的**每窗口调用次数**）+ 续期（`/oauth/refresh`，会轮换）。
+/// 三条平面与四个坑见 `atomcode/mod.rs` 的模块头。
+pub mod atomcode;
 pub mod autoclaw;
 pub mod catalog;
 /// 远程模型清单的**持久化缓存**（各家的清单在进程重启后由它读回，见模块头）。
@@ -530,6 +536,24 @@ pub enum ProviderKind {
     /// 与 [`ProviderKind::Modelscope`] 同一套协议、不同站点（网页站与推理域都不同，
     /// 见 `modelscope::region`）。
     ModelscopeIntl,
+    /// AtomCode（AtomGit / GitCode 的编码 Agent，`atomcode.atomgit.com`）。
+    ///
+    /// ── 上游长什么样（官方 Rust CLI + 本地 Go 参考实现，见 `atomcode/` 各模块头）──
+    /// 三条平面：登录代理 `acs.atomgit.com`（浏览器 OAuth，**回调不回到本机**，
+    /// 靠轮询判完成）、CodingPlan REST `api.gitcode.com/api/v5`（目录 / 套餐 /
+    /// 领取 / 用量）、聊天网关 `api-ai.gitcode.com/v1`（**OpenAI Chat
+    /// Completions 原生**）。
+    ///
+    /// ── 三个与别家不同的硬事实（每一条都能让整条链路静默失效）────────
+    /// 1. 网关**刻意不用官方默认的 `llm-api.atomgit.com/v1`**：那个要求闭源
+    ///    请求签名，而网关是**按 User-Agent** 决定要不要签名的（自称
+    ///    `atomcode/<ver>` 立刻 `403 ATOMCODE_SIG_MISSING`）。见
+    ///    `atomcode::endpoints` 的实测表。
+    /// 2. 令牌**不是 JWT**：过期只能由 `created_at + expires_in` 推；
+    ///    续期会**轮换** refresh token（必须单飞且必须写回）。
+    /// 3. 网关把失败包装成成功：`HTTP 200` + 正文 `参数错误`（或一页上游 HTML
+    ///    报错），见 `atomcode::errors`。
+    Atomcode,
 }
 
 /// 一个提供商的静态元数据。
@@ -642,6 +666,10 @@ pub const PROVIDERS: &[ProviderMeta] = &[
     // 只给国际版加后缀会让「ModelScope」读起来像「两地通吃的那一家」。
     ProviderMeta { id: "modelscope", label: "ModelScope 国内版" },
     ProviderMeta { id: "modelscope-intl", label: "ModelScope 国际版" },
+    // AtomCode（AtomGit / GitCode）：单一地区、单一入口（浏览器登录的界面侧
+    // 尚未接，见 `atomcode/mod.rs` 的模块头），没有国际版伴生。排在末尾
+    // （后到居后，同样让同名模型优先归已有各家）。
+    ProviderMeta { id: "atomcode", label: "AtomCode" },
 ];
 
 /// provider id 在注册表里的下标（未知 id → None）。
@@ -729,6 +757,7 @@ pub fn kind_from_id(id: &str) -> Option<ProviderKind> {
         "chatglm" => Some(ProviderKind::Chatglm),
         "modelscope" => Some(ProviderKind::Modelscope),
         "modelscope-intl" => Some(ProviderKind::ModelscopeIntl),
+        "atomcode" => Some(ProviderKind::Atomcode),
         // 走到这里 = 上面的注册表判定已放行、这个 match 却没有对应分支：
         // 只可能是有人给 `PROVIDERS` 加了条目忘了加这里。开发期喊出来；
         // release 返回 None（见上：宁可为「未知」，不可误认成别家）。
@@ -774,6 +803,7 @@ pub const fn kind_id(kind: ProviderKind) -> &'static str {
         ProviderKind::Chatglm => "chatglm",
         ProviderKind::Modelscope => "modelscope",
         ProviderKind::ModelscopeIntl => "modelscope-intl",
+        ProviderKind::Atomcode => "atomcode",
     }
 }
 

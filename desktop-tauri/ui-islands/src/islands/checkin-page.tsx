@@ -66,6 +66,9 @@ const PROVIDER_DESC: Record<string, string> = {
   // 当日魔粒），没有独立的签到按钮 —— 说明里点出这一点，用户才不会以为漏了什么。
   modelscope: t('无独立签到接口 · 每天替账号打一次登录信息（即当日魔粒）'),
   'modelscope-intl': t('与国内版同一套链路 · 站点不同、令牌不通用'),
+  // AtomCode 的「签到」不是每日发额，而是**领取免费 CodingPlan**（一次性授权）：
+  // 实现按需领取 —— 套餐有效时只回读额度、不重复领；到期或未领才走 Max→Pro→Lite。
+  atomcode: t('领取免费 CodingPlan（按需：套餐有效时只回读额度）'),
 }
 
 /** 页内标签页的档位（值与 checkin-state 的 CheckinTab 一致） */

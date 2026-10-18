@@ -130,7 +130,7 @@ pub fn default_time() -> String {
 /// 这是「有签到或每日活跃任务」的清单，不是「有积分概念」的清单：CatPaw 有积分
 /// 查询但没有签到，因此不在此列 —— 它的账号在批量签到里被算作 `skipped`。
 /// 加一家之前先确认它的签到链路真的存在（一个点了必然报错的复选框比没有更糟）。
-pub const CHECKIN_PROVIDERS: [&str; 15] = [
+pub const CHECKIN_PROVIDERS: [&str; 16] = [
     "workbuddy",
     "workbuddy-intl",
     "raccoon",
@@ -154,6 +154,11 @@ pub const CHECKIN_PROVIDERS: [&str; 15] = [
     // 两个站点各打各的网页站，令牌不通用（打错得 401）。
     "modelscope",
     "modelscope-intl",
+    // AtomCode（AtomGit / GitCode）：本家的「签到」是**领取免费 CodingPlan**
+    // （一次性授权，见 `atomcode::checkin` 的模块头）。挂在这里是因为
+    // 「新账号必须领一次」「套餐到期要能续领」两件事都需要一个逐账号、
+    // 每天跑一次的调度与台账 —— 签到链本来就有。
+    "atomcode",
 ];
 
 /// 缺省的签到提供商集合（全选）
@@ -176,13 +181,14 @@ pub const PROVIDERS_VERSION: i64 = 4;
 /// 「哪一版加入的家」——条目清单的版本低于它 = 这家还没被提供过 ⇒ 补进去。
 /// 版本 1 = 多条目改造上线时的形态（9 家；`qoder-intl` 由 `normalize_providers`
 /// 的存量兼容规则跟着 `qoder` 带上，不在这里重复登记）。
-/// 版本 3 = 智谱清言；版本 4 = ModelScope 的两个站点。
-const PROVIDERS_ADDED_IN: [(&str, i64); 5] = [
+/// 版本 3 = 智谱清言；版本 4 = ModelScope 的两个站点与 AtomCode。
+const PROVIDERS_ADDED_IN: [(&str, i64); 6] = [
     ("officeace", 2),
     ("codearts", 2),
     ("chatglm", 3),
     ("modelscope", 4),
     ("modelscope-intl", 4),
+    ("atomcode", 4),
 ];
 
 /// 版本 `version` 之后才加入清单的家（按注册顺序）。空数组 = 这一版没有新家，
