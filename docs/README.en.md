@@ -48,7 +48,9 @@ Agent2API brings the signed-in accounts of several AI desktop clients together b
 
 ## 💬 Community & Support
 
-- **QQ group**: Agent2API chat group, group number `1127656296` (search the number in QQ to join); questions and feedback are welcome there.
+- **QQ groups**: Agent2API chat groups — **group 1 (`1127656296`) is almost full, please join group 2 (`1130894674`) first**; search the number in QQ to join.
+- **Telegram group**: <https://t.me/+9gM8YPvgRL02NGRl>
+- **Discord server**: <https://discord.gg/z9GzSJMWp>
 - **💖 Donate**: if Agent2API helps you, you are welcome to [buy the author a coffee](./SPONSOR.md); donations are voluntary and unlock nothing.
 - **🤝 Sponsorship / business**: want to sponsor the project, or feature your product here? Email [541675139@qq.com](mailto:541675139@qq.com).
 

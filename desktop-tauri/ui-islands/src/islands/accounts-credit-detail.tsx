@@ -275,7 +275,7 @@ function CreditRowView({ row }: { row: CreditRow }) {
       </div>
       {row.window ? <div className='usage-pop-window'>{row.window}</div> : null}
       {row.percent !== null ? (
-        <span className='usage-pop-track'>
+        <span className={`usage-pop-track ${row.tone}`}>
           <i style={{ width: `${row.percent}%` }} aria-label={t('剩余 {percent}%', { percent: Math.round(row.percent) })} />
         </span>
       ) : null}

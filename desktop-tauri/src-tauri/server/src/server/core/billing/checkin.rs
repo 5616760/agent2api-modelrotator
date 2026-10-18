@@ -801,6 +801,32 @@ pub async fn run_checkin(
             reason,
         );
     }
+    // ── 连登管家：补签 → 档位兑换 → 抽奖（挂签到末尾，与参考项目同款）──
+    //
+    // 为什么挂在这里而不是独立排程：三件事的判据都依赖「今天签到了没有」
+    // （连登天数当天 +1 之后才可能解锁新档位），紧跟签到跑最准；而签到是
+    // 手动与定时共用的唯一入口（`run_checkin` 是两条链的共同执行体），
+    // 挂这里天然覆盖两条路径，不必各写一遍。
+    //
+    // ── 为什么是**后台任务**而不是 await ────────────────────────
+    // 三件事每个账号要 4~6 个上游请求（热力图 / 连登状态 / 兑换 / 抽奖余额 /
+    // 逐次抽奖），加上账号间 800ms 错峰，十几个账号就是几十秒到几分钟 ——
+    // 而管理 API 有 60 秒单请求超时（`gateway::REQUEST_TIMEOUT_MS`）。同步
+    // await 会让前端「立即全部签到」超时报错，而后端其实已经跑完，用户以为
+    // 失败了会再点一次。所以这里**只起任务不等待**：签到结果立刻返回，
+    // 连登管家的收益异步进日志与账号余额。
+    //
+    // 失败**不影响**签到结果：三件事在上游都是幂等的附加收益，且都只服务
+    // 国内版个人账号（门控在 `run_for_accounts` 里）。任何一步出错只进日志，
+    // 绝不把一次成功的签到报成失败 —— 与上面 mark_checkin / record_row 的
+    // 取舍同构。
+    //
+    // 只在**批量轮次**跑（`id.is_none()`）：单账号手动签到是「我只想签这一个」，
+    // 顺手替它兑换抽奖会让用户以为点错了按钮；批量（定时 / 手动全量）才是
+    // 「维护一遍所有账号」的意图。
+    if id.is_none() {
+        spawn_streak_bonus(store.clone(), targets.clone());
+    }
     Ok(json!({
         "results": results,
         "succeeded": succeeded,
@@ -808,6 +834,40 @@ pub async fn run_checkin(
         "total": results.len(),
         "skipped": skipped,
     }))
+}
+
+/// 连登管家：后台跑「补签 → 档位兑换 → 抽奖」，不阻塞签到响应。
+///
+/// 抽成独立函数的原因有三条：
+///   1. **不阻塞**：见 `run_checkin` 里那段「为什么是后台任务」；
+///   2. **隔离失败**：里面任何错误都只进日志，不会冒泡到签到结果；
+///   3. **串行闸**：同一时刻只允许一轮在跑（手动连点签到不会叠出两轮
+///      重复兑换 / 抽奖 —— 上游幂等，但重复打请求本身是浪费且招风控）。
+fn spawn_streak_bonus(store: AccountStore, targets: Vec<Value>) {
+    /// 进程内串行闸：`swap(true)` 抢到才跑，跑完复位。
+    static RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RUNNING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        logging::verbose("[Streak]", "上一轮连登管家仍在执行，本次跳过");
+        return;
+    }
+    crate::spawn_task(async move {
+        let reports = crate::server::core::providers::workbuddy::growth::streak::run_for_accounts(
+            &store, &targets,
+        )
+        .await;
+        let done: usize = reports.iter().map(|report| report.done).sum();
+        let failed: usize = reports.iter().map(|report| report.failed).sum();
+        if done > 0 || failed > 0 {
+            logging::log(
+                "[Streak]",
+                &format!(
+                    "连登管家完成：{done} 项动作{}",
+                    if failed > 0 { format!("，{failed} 项失败") } else { String::new() }
+                ),
+            );
+        }
+        RUNNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
 }
 
 #[cfg(test)]

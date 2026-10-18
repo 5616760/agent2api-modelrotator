@@ -48,7 +48,9 @@ O Agent2API reúne as contas já conectadas de vários clientes de IA em um úni
 
 ## 💬 Comunidade e suporte
 
-- **Grupo QQ**: grupo de chat do Agent2API, número `1127656296` (pesquise o número no QQ para entrar); dúvidas e feedback são bem-vindos.
+- **Grupos do QQ**: grupos de chat do Agent2API — **o grupo 1 (`1127656296`) está quase lotado, prefira o grupo 2 (`1130894674`)**; pesquise o número no QQ para entrar.
+- **Grupo do Telegram**: <https://t.me/+9gM8YPvgRL02NGRl>
+- **Servidor do Discord**: <https://discord.gg/z9GzSJMWp>
 - **💖 Doação**: se o Agent2API ajuda você, fique à vontade para [pagar um café ao autor](./SPONSOR.md); doações são voluntárias e não desbloqueiam nada.
 - **🤝 Patrocínio / negócios**: quer patrocinar o projeto ou divulgar seu produto aqui? Envie um e-mail para [541675139@qq.com](mailto:541675139@qq.com).
 

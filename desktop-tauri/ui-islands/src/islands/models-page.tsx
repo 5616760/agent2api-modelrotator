@@ -347,6 +347,8 @@ function ModelsPage() {
    * 一律按「当前数据里还解析得出来」算（`selectedModels`），残键自然失效。
    */
   const [selection, setSelection] = React.useState<ReadonlySet<string>>(new Set())
+  /** 窄屏筛选抽屉（见 css/mobile.css 的 .mm-filter-*） */
+  const [filterOpen, setFilterOpen] = React.useState(false)
   /** 选中了一个已被删除的自定义家（目录缓存里确实没有这条记录，而不是「还没加载完」）；
       「自定义 · 全部」是聚合哨兵、目录里没有它的记录，不算「已删除」 */
   const customMissing = custom && !isAllCustomView() && directoryReady() && !customSource.record(provider)
@@ -985,9 +987,21 @@ function ModelsPage() {
                     onClick={() => refreshModels()}>{t('获取模型')}</Button>
                   <Button id='btn-add-custom-model' variant='outline' size='sm'
                     onClick={() => openCustomModel()}>{t('＋ 添加模型')}</Button>
+                  {/* 窄屏「筛选」入口：桌面隐藏（CSS 控制）。角标是生效的筛选条数 */}
+                  <button type='button' className='mm-filter-open' onClick={() => setFilterOpen(true)}
+                    aria-label={t('打开筛选')}>
+                    {t('筛选')}
+                    {(() => {
+                      const n = (state.stateFilter !== 'all' ? 1 : 0)
+                        + (state.visibilityFilter !== 'all' ? 1 : 0)
+                        + (state.sort !== 'default' ? 1 : 0)
+                        + (String(state.search || '').trim() ? 1 : 0)
+                      return n > 0 ? <span className='mm-filter-badge'>{n}</span> : null
+                    })()}
+                  </button>
                 </div>
               </div>
-              <div className='mm-filters'>
+              <div className={cn('mm-filters', filterOpen && 'open')}>
                 {/* 状态筛选：语义、键盘、滑块都在组件库里，取值仍以快照为准（完全受控） */}
                 <SegmentedControl options={MODEL_STATE_OPTIONS} value={state.stateFilter}
                   onValueChange={setStateFilter} aria-label={t('按状态筛选')} className='shrink-0' />
@@ -1021,6 +1035,21 @@ function ModelsPage() {
                       onClick={() => setBatchOpen(true)}>{t('批量操作')}</Button>
                   </span>
                 ) : null}
+              </div>
+              {/* 窄屏筛选抽屉的遮罩与标题栏（桌面 display:none，不占位）。
+                  三个分段筛选与搜索框由 CSS 从 .mm-filters 搬进右侧抽屉。 */}
+              <div className={cn('mm-filter-scrim', filterOpen && 'open')} onClick={() => setFilterOpen(false)} />
+              <div className={cn('mm-filter-head', filterOpen && 'open')}>
+                <span className='mm-filter-title'>{t('筛选')}</span>
+                <Button variant='ghost' size='sm' className='mm-filter-clear'
+                  onClick={() => {
+                    setStateFilter('all')
+                    setVisibilityFilter('all')
+                    setSort('default')
+                    setSearch('')
+                  }}>{t('清空')}</Button>
+                <Button variant='ghost' size='sm' className='mm-filter-close'
+                  onClick={() => setFilterOpen(false)} aria-label={t('关闭')}>✕</Button>
               </div>
             </div>
             <div className='models-table-wrap'>

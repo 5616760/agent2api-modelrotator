@@ -14,6 +14,7 @@ Depois de instalar, qualquer forma é gerenciada pelo **painel no navegador** (c
 - [Docker](#docker)
 - [Verificação e conexão do cliente](#verificação-e-conexão-do-cliente)
 - [Acesso pela rede local](#acesso-pela-rede-local)
+- [Celular](#celular)
 
 ## Qual forma escolher
 
@@ -229,3 +230,80 @@ print(resp.choices[0].message.content)
 Por padrão o gateway escuta apenas `127.0.0.1`. Ao ativar "Configurações → Geral → Acesso pela rede local" ele passa a escutar todos os adaptadores e os dispositivos da rede só precisam apontar o endereço da API para o IP desta máquina (a interface mostra o endereço completo). Por segurança, é obrigatório registrar um administrador do painel antes de ativar: a API de gerenciamento passa a exigir sessão de administrador ou uma Gateway Key e, sem chave ativa, a API de encaminhamento também recusa (o fluxo cria uma chave "padrão" automaticamente). O painel web pode ser exposto à rede local opcionalmente (fechado por padrão). As mudanças valem após reiniciar.
 
 Os instaladores de desktop (Windows / macOS) já incluem a pasta `ui/` do painel web: ao ativar também a opção de expor o painel de gerenciamento à rede local, dispositivos da rede podem abrir o mesmo endereço no navegador e ver a interface de gerenciamento — a mesma interface da versão Docker. **A janela do desktop em si nunca passa pelo login web** (não existe página de login no app): ela se autentica com a primeira Gateway Key desta máquina, então ligar esse interruptor não pede login no app. A página de login web só aparece quando um navegador abre o painel.
+
+## Celular
+
+Há duas formas — escolha a que precisar:
+
+| Forma | Como instalar | Indicada para |
+| --- | --- | --- |
+| **Navegador / PWA** | Abra `/m` no navegador do celular; opcionalmente "Adicionar à tela inicial" | Consulta rápida, sem instalar nada |
+| **APK Android** | Instale `Agent2API-<versão>.apk` | Ícone na tela inicial, tela cheia, vários servidores |
+
+As duas rodam o mesmo código de interface. A diferença é quem serve a página: o PWA é servido pelo gateway (então "também expor o painel de gerenciamento web" precisa estar ligado), enquanto o APK leva a interface dentro do pacote (então consegue abrir a interface offline e não precisa dessa opção).
+
+### Pré-requisitos (por forma)
+
+**Desktop (Windows / macOS / Linux)**: as duas opções precisam estar ligadas; uma sem a outra não funciona.
+
+1. "Configurações → Geral → Acesso pela rede local" — permite que dispositivos da rede acessem o gateway. O fluxo de ativação pede o registro de um administrador do painel e cria automaticamente uma chave chamada "padrão".
+2. "Configurações → Geral → Acesso pela rede local → também expor o painel de gerenciamento web" — serve a pasta estática `ui/`. **Necessária para a forma navegador / PWA** (`/m` é servido pelo gateway, então retorna 404 enquanto esta opção estiver desligada). **O APK não precisa dela** (a interface está no pacote), mas ainda precisa da opção 1 — sem ela o gateway escuta apenas em `127.0.0.1` e o celular não alcança.
+
+Ambas exigem reinício para valer.
+
+**Servidor / Docker**: nenhuma opção extra — as duas formas já escutam em todos os adaptadores e servem `ui/` por padrão (`AGENT2API_UI_DIR=/app/ui` está fixo no Dockerfile). Basta que a porta do contêiner ou do serviço seja alcançável pela rede local. Se você definiu `AGENT2API_HOST=127.0.0.1` manualmente, mude para `0.0.0.0`; se `AGENT2API_UI_DIR` apontar para um diretório inexistente, o painel retorna 404 mas a API continua funcionando.
+
+### Abrir no celular (navegador / PWA)
+
+`http://<IP da rede local da máquina que roda o gateway>:3065/m`
+
+No desktop, é o endereço mostrado no painel de configurações acima (por exemplo `192.168.1.23`) — troque o `/v1` final por `/m`. Para Docker / servidor use o IP da rede local do host e a porta mapeada.
+
+A primeira visita redireciona para a página de login; entre com o administrador do painel e ela volta automaticamente para a interface móvel. Se ainda não houver administrador, a página de login pede para criar um.
+
+### Instalar o APK (Android)
+
+Na primeira execução aparece uma tela "Servidores". São três passos:
+
+1. Toque em "Adicionar" e informe o `IP:porta` do gateway (por exemplo `192.168.1.23:3065`; a porta padrão é 3065);
+2. Toque em "Conectar e salvar" — ele testa o gateway antes, então endereço errado ou gateway sem acesso pela rede local são reportados ali mesmo;
+3. Aparece a página de login. Informe a conta de administrador e a senha deste gateway (se ainda não houver administrador, vira "Criar conta de administrador").
+
+**Vários servidores**: toque em "Adicionar" de novo. Cada servidor guarda o próprio login — trocar não exige entrar de novo, e voltar também não. O ponto de entrada é "Configurações → Servidores"; toque em uma linha para trocar.
+
+**Limitações conhecidas do APK**:
+
+- Apenas Android. O iOS exige uma conta Apple Developer para assinar, ou instalação pelo Xcode (assinaturas de sideload expiram em 7 dias).
+- Fala com endereços `http://` da rede local em texto claro. O risco é "interceptável na mesma rede local"; o gateway em si continua exigindo login de administrador. Para eliminar, configure TLS no gateway e informe um endereço `https://` (a análise é a mesma, apenas não prefixa `http`).
+- A interface segue a versão do APK, não a do gateway. Se uma atualização do gateway adicionar telas novas, é preciso um APK mais novo para vê-las; mudanças apenas de dados não são afetadas.
+
+### Adicionar à tela inicial (navegador / PWA)
+
+Opcional — dá tela cheia sem barra de endereço. A interface móvel oferece o ponto de entrada em "Configurações → Instalar como app":
+
+- **Android / Chrome**: toque em "Adicionar à tela inicial" nas configurações (abre o diálogo de instalação do sistema); ou use o menu → "Adicionar à tela inicial" / "Instalar app"
+- **iOS / Safari**: o Safari não tem API de instalação, então a página de configurações mostra o passo a passo — Compartilhar → "Adicionar à Tela de Início"
+
+Abrir pelo ícone da tela inicial leva direto à página inicial móvel. Quando já está rodando numa janela independente, a página de configurações mostra "Instalado".
+
+Quando há uma nova versão, uma barra "Reiniciar e atualizar" surge na parte de baixo: após a atualização do gateway a nova interface já foi baixada e um toque alterna para ela (ignorar não atrapalha o uso atual — passa a valer na próxima abertura).
+
+> **Por que não há app nativo nem pacote na loja**: a interface móvel sempre fala com um gateway rodando em **outra máquina** (o gateway precisa ler os logins dos clientes daquela máquina e gravar seus arquivos de configuração — não pode rodar num celular). É fundamentalmente "acesso remoto a um serviço HTTP", e o navegador é o veículo certo: autenticação de mesma origem, sem instalação, e atualiza junto com o gateway. A forma PWA acrescenta tela cheia e ícone na tela inicial, então parece um app nativo.
+>
+> **Service Worker (shell offline) só funciona em `https` ou `localhost`**: o acesso pela rede local usa `http://<IP>`, onde os navegadores não oferecem SW, então a interface móvel não abre offline. É uma restrição de segurança do navegador, não um recurso ausente — no uso normal o gateway está online, então não faz diferença.
+
+### O que pode e não pode fazer
+
+| Pode | Não pode (use o app de desktop) |
+| --- | --- |
+| Relatórios, status das contas, saldos, logs de requisições, logs de execução | Adicionar contas (QR / colar token / importar login do cliente) |
+| Ativar/desativar contas, atualizar credenciais, excluir contas | Editar credenciais, proxy ou regras de limite de uma conta |
+| Check-in com um toque, ver histórico de check-in | Resgatar recompensas de integração e planos individualmente |
+| Ativar/desativar modelos, filtrar por provedor | Editar mapeamentos de modelo, níveis de raciocínio, flags de capacidade |
+| Copiar gateway keys, ativar/desativar keys | Criar keys, definir listas de provedores/modelos permitidos |
+| Ativar/desativar proxies, testar conectividade | Adicionar proxies, gerenciar assinaturas, baixar o kernel |
+| Ativar/desativar tarefas agendadas, alterar intervalos | Alterar porta, roteamento, retry, timeouts, retenção de dados |
+| Consultas rápidas do assistente (saldos / modelos duplicados / uso de hoje / contas limitadas) | Conversa livre e chamada de ferramentas do assistente |
+| Ver status do takeover de Agent, restaurar | Reescrever configurações de clientes (um celular não lê arquivos locais) |
+
+A barra lateral do desktop tem uma entrada "Abrir no celular" no rodapé que leva à mesma página.

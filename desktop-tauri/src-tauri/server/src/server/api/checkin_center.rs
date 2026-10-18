@@ -307,6 +307,9 @@ pub async fn get_center(State(state): State<ServerState>) -> Response {
         "auto": state.auto_checkin().state(),
         // WorkBuddy 国际版日活保活的模型链（签到中心可编辑；空清单回落缺省链）
         "keepalive": crate::server::core::billing::keepalive::state(),
+        // 猫猫旅行定时排程（国内版）：开关 / 时刻 / 今日已跑时刻 / 上一轮结果。
+        // 与 `auto`（签到排程）并列 —— 两者是独立排程，各自开关与时刻。
+        "travel": crate::server::core::growth_scheduler::state(),
         "history": checkin_history::list(),
     }))
 }

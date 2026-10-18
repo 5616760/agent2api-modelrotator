@@ -1297,6 +1297,18 @@ export type AccountTag = { text: string; kind: 'plain' | 'bad'; title: string }
  */
 export function accountTags(account: AccountRecord): AccountTag[] {
   return [
+    // 登录态被上游注销（issue #215）：refresh token 链已死，刷新不会再成功，
+    // 凭证维护也会跳过它 —— 只能重新登录。不标出来用户只会看到「刷新一直失败」。
+    // 放在最前面：它比下面任何一条都更该被看见（账号等于已经废了）。
+    account.needsRelogin
+      ? {
+        text: t('需要重新登录'),
+        kind: 'bad' as const,
+        title: account.needsReloginReason
+          ? t('{reason}。该账号的登录态已被上游注销，自动刷新不会再成功，请重新登录该账号', { reason: account.needsReloginReason })
+          : t('该账号的登录态已被上游注销，自动刷新不会再成功，请重新登录该账号'),
+      }
+      : null,
     // 没有转发能力的家：它的启用开关对转发没有意义，这里如实说明，而不是留一片空白
     // 让人以为「没标记就是好的」。判据是后端的 chatSupported，正常配置下不会出现 ——
     // 留着是为了「将来某家处于只有账号管理的过渡期」时界面能自己说清楚
