@@ -79,6 +79,7 @@ Agent2API 把多家 AI 桌面客户端里已登录的账号接到一起，共用
 | OfficeAce（华为云果办 / OfficeClaw） | ✓ | ✓ | ✓ | ✓ | ✓ | — |
 | OrcaTerm（腾讯云遨驰终端） | ✓ | ✓ | ✓ | ✓ | — | — |
 | 智谱清言 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| ModelScope（魔搭，国内版 / 国际版） | ✓ | ✗ | ✓ | ✓ | ✓ | — |
 | 自定义提供商 | ✓ | — | ✓ | — | — | — |
 
 > 注：模型列表的 ✓ 表示支持在线自动拉取，部分平台另有内置静态表兜底；ZCode 仅有内置静态表。Token 续期列 ✗ 表示该平台没有可用的续期接口（账号在有效期内不受影响）。Qoder 签到仅中国版可用。
@@ -178,7 +179,7 @@ macOS 的 `.dmg` **只能在 macOS 上构建**（`npm --prefix desktop-tauri run
 
 ### 仅供学习与交流
 
-本项目是一个用于学习 HTTP 反向代理、SSE 流式透传、多上游协议适配与桌面端打包（Tauri）等技术主题的实践项目，**仅供个人学习与研究使用**。它不是官方产品，与腾讯公司及 WorkBuddy / CodeBuddy、美团及 CatPaw、商汤及小浣熊、智谱及 AutoClaw / autoglm、阿里巴巴及 Qoder / Accio、华为云及 CodeArts / OfficeAce、字节跳动及 Trae、科大讯飞及 Loomy、百度文库及 KukuAI、长亭科技及 MonkeyCode、Command Code、Google 及 Antigravity 均无任何关联，未获得其授权、认可或赞助。
+本项目是一个用于学习 HTTP 反向代理、SSE 流式透传、多上游协议适配与桌面端打包（Tauri）等技术主题的实践项目，**仅供个人学习与研究使用**。它不是官方产品，与腾讯公司及 WorkBuddy / CodeBuddy、美团及 CatPaw、商汤及小浣熊、智谱及 AutoClaw / autoglm、阿里巴巴及 Qoder / Accio、华为云及 CodeArts / OfficeAce、字节跳动及 Trae、科大讯飞及 Loomy、百度文库及 KukuAI、长亭科技及 MonkeyCode、Command Code、Google 及 Antigravity、阿里巴巴及 ModelScope（魔搭）均无任何关联，未获得其授权、认可或赞助。
 
 ### 关于反向代理行为
 

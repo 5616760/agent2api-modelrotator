@@ -1170,6 +1170,13 @@ pub fn adapter_for(kind: ProviderKind) -> &'static dyn ProviderAdapter {
         // （见 `chatglm/mod.rs` 与 `protocol::chatglm_stream` 的模块头）。
         // 它是本项目**唯一**「访客免登录即可用」的一家（`guest/access` 换证）。
         ProviderKind::Chatglm => &super::chatglm::CHATGLM_ADAPTER,
+        // ModelScope 的两个站点是两个 provider、两个实例（同一份实现的按地区
+        // 参数化，见 `modelscope::region` 与 `modelscope::mod` 的模块头）：
+        // 国内站打 `api-inference.modelscope.cn` / `modelscope.cn`，
+        // 国际站打 `.ai` 两个域 —— 打错了会拿到 401（实测），
+        // 所以这里 kind → region 必须逐字对应。
+        ProviderKind::Modelscope => &super::modelscope::MODELSCOPE_ADAPTER,
+        ProviderKind::ModelscopeIntl => &super::modelscope::MODELSCOPE_INTL_ADAPTER,
     }
 }
 
@@ -1273,6 +1280,12 @@ pub fn implemented_kinds() -> Vec<ProviderKind> {
         // 且有远程目录（`operation/detail?tag=available_models`）—— 必须在
         // 列表里，否则目录刷新循环不会问它（与 Trae / Loomy / Kuku 同一理由）。
         ProviderKind::Chatglm,
+        // ModelScope 的两个站点各算一家：与国内版各自一份模型清单（各打各的
+        // 推理域）、各自的缓存槽与刷新排期 —— 两家都必须在列表里，否则国际版的
+        // 目录刷新永远不会被调度（症状是「国际版账号加了、模型列表一直是空的」，
+        // 与 WorkBuddy 国际版那条同一理由）。
+        ProviderKind::Modelscope,
+        ProviderKind::ModelscopeIntl,
     ]
 }
 

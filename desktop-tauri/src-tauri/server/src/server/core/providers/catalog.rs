@@ -196,6 +196,17 @@ pub(crate) fn refresh_meta(kind: ProviderKind) -> (bool, i64) {
             super::chatglm::models::remote_refreshed(),
             super::chatglm::models::last_refreshed_at(),
         ),
+        // ModelScope 的两个站点各有一份独立清单（缓存按地区分格，见
+        // `modelscope::models` 的模块头）：这里如实各查**自己那一格**。
+        // 上游**没有**内置兜底清单，所以「有内容」就等于「远程拉到过」。
+        ProviderKind::Modelscope | ProviderKind::ModelscopeIntl => {
+            let region = super::modelscope::Region::from_kind(kind)
+                .unwrap_or(super::modelscope::Region::Cn);
+            (
+                super::modelscope::models::remote_refreshed(region),
+                super::modelscope::models::last_refreshed_at(region),
+            )
+        }
     }
 }
 
