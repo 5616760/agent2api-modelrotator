@@ -36,6 +36,7 @@
         "installMode": "perMachine",
         "installerIcon": "icons/icon.ico",
         "installerHooks": "nsis-hooks.nsh",
+        "template": "nsis-template.nsi",
         "languages": [
           "SimpChinese"
         ]
