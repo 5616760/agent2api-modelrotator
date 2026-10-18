@@ -87,7 +87,7 @@ use crate::server::core::providers::custom::forward as custom_forward;
 use crate::server::core::providers::readiness;
 use crate::server::core::providers::router::route_for_forward;
 use crate::server::core::providers::{kind_from_id, kind_id, meta, ProviderKind};
-use crate::server::errors::GatewayError;
+use crate::server::errors::{parse_quota_reset_at, GatewayError};
 use crate::server::logging;
 
 use super::payload::{send_body, ProviderContext, SendBody};
@@ -1570,19 +1570,27 @@ async fn attempt_queue(
                         }),
                 };
             if let Some((message, is_quota, refusal_label)) = refusal_hit {
+                    // 上游那句原话：配额型的**窗口重置时刻**要从它里面读出来
+                    // （认「当日 HH:MM」与「… HH:MM:SS UTC+8」两种形态，见
+                    // `errors::parse_quota_reset_at`）。SSE 噪声原样喂进去没问题 ——
+                    // 它只在字节流里找时刻，不做 JSON 解析。
+                    let upstream_text = String::from_utf8_lossy(&head.buffered).to_string();
+                    // 给客户端的等待时长（秒）：0 = 认不出恢复时刻，那就只回 429 不带头
+                    let mut refusal_reset_at: i64 = 0;
                     // 配额型：这一家的额度用完了 ⇒ 罚账号。冷却时长交给
                     // `mark_account_limited` 的文本兜底去解析正文里的窗口重置时刻
                     // （「…当前滚动窗口约在当日 HH:MM 结束并重置额度…」）；解析不出时
                     // 它自己的兜底是 10 分钟。
                     if is_quota {
                         if let Some(account_id) = &target.account_id {
+                            refusal_reset_at = parse_quota_reset_at(&upstream_text);
                             let reset_text = rotate::mark_account_limited(
                                 service,
                                 account_id,
                                 &model,
                                 429,
                                 None,
-                                None,
+                                if refusal_reset_at > 0 { Some(refusal_reset_at) } else { None },
                                 &message,
                             );
                             logging::console_line(
@@ -1614,9 +1622,20 @@ async fn attempt_queue(
                     // 队列没人 / 换号次数用尽时给客户端的那句话：要说清是哪一类拒绝 ——
                     // 内容型是「换一家或改内容」，配额型是「等窗口重置后重试」。
                     let client_text = if is_quota {
-                        "上游配额拒绝（该账号的用量窗口已耗尽）：没有其他可用的账号或提供商可接管。\
-                         请在窗口重置后重试，或在设置中更换该模型的服务商"
-                            .to_string()
+                        // 说清是哪一类拒绝，并把**恢复时刻**写进 body（与 `Retry-After`
+                        // 同一个数）—— 只读 body 的客户端也知道要等多久。
+                        let when = if refusal_reset_at > 0 {
+                            format!(
+                                "，额度预计在 {} 重置",
+                                crate::server::errors::format_reset_at_text(refusal_reset_at)
+                            )
+                        } else {
+                            String::new()
+                        };
+                        format!(
+                            "上游配额拒绝（该账号的用量窗口已耗尽{when}）：没有其他可用的账号或提供商可接管。\
+                             请在窗口重置后重试，或在设置中更换该模型的服务商"
+                        )
                     } else {
                         format!(
                             "上游拒答（{refusal_label}）：该答复疑似被上游内容策略拦截，\
@@ -1632,7 +1651,11 @@ async fn attempt_queue(
                     ) {
                         Some(next) => {
                             if !take_switch(&mut switches_left, switch_total) {
-                                return Err(GatewayError::with_status(502, client_text));
+                                return Err(quota_refusal_error(
+                                    client_text,
+                                    refusal_reset_at,
+                                    is_quota,
+                                ));
                             }
                             let next_home = {
                                 let next_provider = rotate::provider_of(&next);
@@ -1667,7 +1690,9 @@ async fn attempt_queue(
                             );
                             continue 'accounts;
                         }
-                        None => return Err(GatewayError::with_status(502, client_text)),
+                        None => {
+                            return Err(quota_refusal_error(client_text, refusal_reset_at, is_quota))
+                        }
                     }
             }
             Gate::Held(head)
@@ -2617,6 +2642,30 @@ async fn send_with_retry(
     }
 }
 
+/// 拒答落到客户端时的错误形态。
+///
+/// ── 为什么配额型是 429 而内容型仍是 502 ───────────────────────
+/// 配额型：**本账号的额度用完了** —— 同号重试无用，但等窗口重置后同一份请求
+/// 大概率能成。这正是 429 + `Retry-After` 的语义（与 Trae 的
+/// `SoftRate | PlanLimit → 429` 同一口径），客户端据此退避而不是放弃。
+/// 内容型：**这份内容被上游拦了**，换一家也会被拦；回 429 等于让客户端按退避
+/// 重试同一份内容 —— 那是骗它排队。所以保持 502，文案里说的是「改内容或换服务商」。
+///
+/// `reset_at > 0` 才挂 `Retry-After`：算不出恢复时刻就不给头（见
+/// `GatewayError::with_retry_after_seconds` 的说明）。
+fn quota_refusal_error(client_text: String, reset_at: i64, is_quota: bool) -> GatewayError {
+    if !is_quota {
+        return GatewayError::with_status(502, client_text);
+    }
+    let error = GatewayError::with_status(429, client_text);
+    let seconds = (reset_at - logging::now_ms()) / 1000;
+    if seconds > 0 {
+        error.with_retry_after_seconds(seconds as u64)
+    } else {
+        error
+    }
+}
+
 #[cfg(test)]
 mod local_failure {
     //! 「本机就发不出去」这一条在编排层的两条判据。
@@ -2647,5 +2696,30 @@ mod local_failure {
         // 用户把名单清空也挡不住本地失败换号，反过来用户点名 556 也不该有额外效果。
         // 这条用例的存在是为了让「改成走名单」这个念头先撞上说明。
         assert!(!direct_switch_status(i64::from(readiness::LOCAL_PRECONDITION_STATUS)));
+    }
+
+    #[test]
+    fn a_quota_refusal_reaches_the_client_as_429_with_the_wait_it_knows() {
+        // 配额拒答：客户端要能据此**退避**，所以 429 +（已知时）`Retry-After`。
+        let now = crate::server::logging::now_ms();
+        let error = super::quota_refusal_error("配额拒绝".to_string(), now + 90_000, true);
+        assert_eq!(429, error.status_code);
+        assert_eq!(Some(90), error.retry_after_secs);
+        // 算不出恢复时刻（0）：仍然是 429，但**不带头** —— 不给编造的等待时长
+        let unknown = super::quota_refusal_error("配额拒绝".to_string(), 0, true);
+        assert_eq!(429, unknown.status_code);
+        assert_eq!(None, unknown.retry_after_secs);
+        // 已过的恢复时刻同理（冷却已失效），不给一个负数/零头
+        let stale = super::quota_refusal_error("配额拒绝".to_string(), now - 60_000, true);
+        assert_eq!(None, stale.retry_after_secs);
+    }
+
+    #[test]
+    fn a_content_refusal_stays_502_so_clients_do_not_queue_on_the_same_body() {
+        // 内容型：换一家也会被拦 ⇒ 不能用「等一会儿再来」的语义骗客户端排队。
+        let now = crate::server::logging::now_ms();
+        let error = super::quota_refusal_error("内容拒答".to_string(), now + 90_000, false);
+        assert_eq!(502, error.status_code);
+        assert_eq!(None, error.retry_after_secs, "内容型不该带 Retry-After");
     }
 }
