@@ -16,8 +16,8 @@
   },
   "bundle": {
     "active": true,
-    "publisher": "aimod-cc",
-    "copyright": "Copyright (c) 2026 aimod-cc",
+    "publisher": "Agent2API",
+    "copyright": "Copyright (c) 2026 Agent2API",
     "targets": [
       "nsis"
     ],

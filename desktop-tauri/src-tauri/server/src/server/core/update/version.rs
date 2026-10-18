@@ -15,7 +15,7 @@
 use serde_json::Value;
 
 /// 默认仓库（本项目的上游）；fork 后可自行覆盖（Node 版 DEFAULT_REPO）
-pub const DEFAULT_REPO: &str = "aimod-cc/agent2api";
+pub const DEFAULT_REPO: &str = "Agent2API/agent2api";
 
 /// GitHub API 根（Node 版 GITHUB_API）—— [`api_base`] 的默认值
 pub const GITHUB_API: &str = "https://api.github.com";

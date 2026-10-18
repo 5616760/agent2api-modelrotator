@@ -2,13 +2,13 @@
 name = "agent2api-server"
 version = "3.0.9-beta.1"
 description = "Agent2API 网关本体 — 多提供商本地网关（桌面端与 headless 服务器共用）"
-authors = ["aimod-cc"]
+authors = ["Agent2API"]
 edition = "2021"
 # MSRV 与桌面 crate 保持一致（rusqlite 0.40 → libsqlite3-sys 0.38 声明 1.88）
 rust-version = "1.88"
 license-file = "../../../LICENSE"
-repository = "https://github.com/aimod-cc/agent2api"
-homepage = "https://github.com/aimod-cc/agent2api"
+repository = "https://github.com/Agent2API/agent2api"
+homepage = "https://github.com/Agent2API/agent2api"
 
 # 关掉 bin 自动发现：`src/bin/service.rs` 其实是 `agent2api-server.rs` 的**模块**
 # （那边写着 `#[cfg(windows)] pub mod service;`），但 Cargo 会把 `src/bin/*.rs`

@@ -24,10 +24,10 @@
     "sse",
     "llm"
   ],
-  "author": "aimod-cc",
+  "author": "Agent2API",
   "repository": {
     "type": "git",
-    "url": "https://github.com/aimod-cc/agent2api.git"
+    "url": "https://github.com/Agent2API/agent2api.git"
   },
   "license": "SEE LICENSE IN LICENSE",
   "engines": {

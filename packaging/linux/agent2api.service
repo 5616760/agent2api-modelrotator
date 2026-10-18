@@ -1,6 +1,6 @@
 [Unit]
 Description=Agent2API 网关（多提供商本地网关，无界面服务形态）
-Documentation=https://github.com/aimod-cc/agent2api
+Documentation=https://github.com/Agent2API/agent2api
 # 网关要出网调上游（模型清单、账号签到、版本检查），等网络真就绪再启动，
 # 否则首次拉清单会全是 DNS 失败，日志里一片红但服务其实没坏。
 After=network-online.target
