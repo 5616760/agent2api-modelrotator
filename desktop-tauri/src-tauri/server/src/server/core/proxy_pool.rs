@@ -159,16 +159,21 @@ fn write_items(items: &[Value]) -> Result<(), String> {
     let db = database()?;
     let text = serde_json::to_string(&json!({ "items": items }))
         .map_err(|error| format!("编码代理池失败: {error}"))?;
-    db.with(|conn| {
-        conn.execute(
-            "INSERT INTO kv (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            rusqlite::params![KV_KEY, text],
-        )
-        .map(|_| ())
-        .map_err(|error| format!("保存代理池失败: {error}"))
-    })
-    .ok_or_else(|| "代理池数据库不可用".to_string())?
+    let written = db
+        .with(|conn| {
+            conn.execute(
+                "INSERT INTO kv (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![KV_KEY, text],
+            )
+            .map(|_| ())
+            .map_err(|error| format!("保存代理池失败: {error}"))
+        })
+        .ok_or_else(|| "代理池数据库不可用".to_string())?;
+    written?;
+    // 保留键不走 `config::update`，显式通知自动同步（见 cloud_sync::auto_sync）
+    crate::server::core::cloud_sync::auto_sync::notify_change();
+    Ok(())
 }
 
 // ─── 正规化与校验 ───────────────────────────────────────────

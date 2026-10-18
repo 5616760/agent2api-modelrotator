@@ -2166,6 +2166,9 @@ export async function load(): Promise<void> {
     loadModelsDev(),
     // 软件更新面板是另一个岛（update-panel.tsx），切进设置页时让它自己刷新一次
     shared().wbUpdatePanel?.load?.(),
+    // 「版本信息」也是独立岛（system-info-pane.tsx）：同样在切进设置页时重拉 ——
+    // 版本 / 运行时长 / 在途请求这些读数会随时间变，缓存一份旧的没有意义
+    shared().wbSystemInfoPane?.load?.(),
   ])
 }
 

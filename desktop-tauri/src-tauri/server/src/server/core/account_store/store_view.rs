@@ -434,6 +434,21 @@ impl AccountStore {
                 // 恒为数字（无记录时 0）而不是缺键：界面按 `Number(...) || 0` 读，
                 // 两种形态都能吃，但恒定的形状让「字段缺失」与「值为 0」不再需要分开判。
                 fields.insert("checkinAt".to_string(), Value::from(record.checkin_at()));
+                // 成长中心连登天数（WorkBuddy 国内版；签到后回读落库，见
+                // `AccountStore::mark_streak_days`）。恒为数字键（0 = 还没读到过），
+                // 与 checkinAt 同一理由：界面按数字读，不必判「字段缺失」。
+                // 只有国内版会写这个字段，别家恒 0 —— 不按 provider 分支是刻意的：
+                // 形状恒定，读侧不必查表。
+                fields.insert(
+                    "streakDays".to_string(),
+                    Value::from(
+                        record
+                            .fields()
+                            .get("streakDays")
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0),
+                    ),
+                );
                 // 单账号并发上限（所有家通用的账号属性）：跨家统一注入的理由与上面
                 // 三条相同 —— 选路（`routing::max_concurrent_of`）与前端账号菜单读的
                 // 是**同一份事实**。恒为数字键（0 = 不限），且**只在这里写一次**：

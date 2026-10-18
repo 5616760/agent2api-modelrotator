@@ -140,6 +140,12 @@ import {
 // AI 助手分类的面板（对话模型 / 系统提示词 / 工具勾选）。独立成文件、自带一份
 // 数据流（/api/assistant/config），见该文件的模块头
 import { AssistantSettingsPane } from './assistant-settings-pane'
+// 云同步面板（设置 → 数据）：独立成文件、自带一份数据流（/api/cloud-sync），
+// 与设置页的快照 store 没有交集，见该文件的模块头
+import { CloudSyncPanel } from './settings-cloud-sync'
+// 侧边栏菜单面板（设置 → 显示）：显隐 / 顺序 / 分组。布局模型在
+// ui/sidebar-layout.js（经典脚本，主侧边栏渲染与这里共用同一份），见该文件的模块头
+import { SidebarPane } from './sidebar-pane'
 import { t } from '../i18n'
 
 /**
@@ -572,6 +578,12 @@ function DisplayPane() {
           <div className='settings-state'>{STATES.languageHint}</div>
         </div>
       </section>
+
+      {/* 侧边栏菜单：显隐 / 顺序 / 分组。它自己持有一份本机偏好
+          （localStorage，见 ui/sidebar-layout.js），与上面三项同属「纯前端偏好」，
+          所以放在「显示」分类里、不经过 settings-state 的快照。
+          布局的唯一真相在那个经典脚本里 —— app.js 渲染主侧边栏时读的是同一份。 */}
+      <SidebarPane />
     </>
   )
 }
@@ -1752,6 +1764,12 @@ function DataPane({ snap }: { snap: SettingsSnapshot }) {
 
   return (
     <>
+      {/* 云同步（对标 cc-switch 的 WebDAV / S3 同步区块）：独立成文件、自带
+          数据流（它只读写 /api/cloud-sync，与设置页其它面板没有状态交集）。
+          排在「整库备份 / 恢复」之前 —— 两者都是「整份数据搬来搬去」的语义，
+          云同步更常用，放上面。 */}
+      <CloudSyncPanel />
+
       {/* 整库备份 / 恢复：仅桌面端渲染（web shim 没有这两个桥方法）。
           排在「账号导入 / 导出」之前 —— 恢复是整库替换，两种语义别让用户混着看 */}
       {!isWebBridge && (
@@ -2287,6 +2305,15 @@ function SettingsPage() {
         <div className={paneClass('feedback')} data-cat='feedback'>
           <FeedbackPane />
         </div>
+        {/*
+          「版本信息」同样由独立岛接管（system-info-pane.tsx，选择器
+          `.settings-pane[data-cat="system"]`）。约束与下面「更新」那条完全一样：
+          必须是**空的**、且永远保持同一个元素 —— 那个岛在自己的模块加载期就把
+          React root 建在这个 div 上，React 这边只要不去动它的子树，渲染结果就留得住。
+          拆成独立岛而不是塞进本文件：本文件已经 2300 多行，而这块与设置项
+          没有任何状态交集（它自己拉 `/api/system-info`）。
+        */}
+        <div className={paneClass('system')} data-cat='system' />
         {/*
           「更新」的面板（原「关于」，id 仍是 about）由另一个岛（update-panel.tsx）接管：
           它按这个选择器找挂载点，找到就把 React root 建在这个 div 上。所以这里必须是

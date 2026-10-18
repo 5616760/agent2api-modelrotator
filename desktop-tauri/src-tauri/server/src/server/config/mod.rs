@@ -1196,12 +1196,50 @@ where
     F: FnOnce(&mut RuntimeConfig),
 {
     let mut next = current();
+    let before = synced_fingerprint(&next.raw);
     mutate(&mut next);
     let saved = save_raw(&next.raw);
+    // 先算改动后的指纹再交出所有权：`next` 要移进内存快照
+    let changed = before != synced_fingerprint(&next.raw);
     if let Ok(mut guard) = CONFIG.write() {
         *guard = Some(next);
     }
+    // 云同步的自动上传：只有**同步范围内的键**真的变了才发信号。
+    //
+    // ── 为什么在这里而不是在 `save_raw` 里 ─────────────────────
+    // `save_raw` 也被迁移等路径调用，而那些路径不该触发上传（迁移跑在启动期，
+    // 远端还没配）。`update` 是「运行期改配置」的唯一入口（所有 setter 都经它），
+    // 语义正好。
+    //
+    // ── 为什么要在改之前先算一份指纹 ───────────────────────────
+    // `set_debug_mode` 这类 setter 会在「值没变」时也调 `update`（界面拨回原值）。
+    // 不比对的话每次拨动都会上传一次；比对之后只有真变了才发信号。
+    if changed {
+        crate::server::core::cloud_sync::auto_sync::notify_change();
+    }
     saved
+}
+
+/// 同步范围内 kv 键的指纹：键名 + 值的稳定序列化。
+///
+/// 只用于「这次 `update` 有没有改动云同步关心的内容」，因此不必是密码学哈希
+/// —— 但用 sha256 可以避免把整份配置（含提示词全文）留在内存里做比较。
+fn synced_fingerprint(raw: &Map<String, Value>) -> String {
+    use crate::server::core::cloud_sync::snapshot::is_synced_kv_key;
+    use sha2::{Digest as _, Sha256};
+
+    let mut hasher = Sha256::new();
+    // `raw` 是 `serde_json::Map`（默认 BTreeMap），迭代顺序稳定
+    for (key, value) in raw {
+        if !is_synced_kv_key(key) {
+            continue;
+        }
+        hasher.update(key.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(value.to_string().as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 /// 把整份配置写进统一库（对应 Node 版 `saveConfig`）。

@@ -111,6 +111,87 @@ export type AppSettings = {
   lightweightMode: boolean
 }
 
+/**
+ * 「版本信息」的读数（`GET /api/system-info`，桌面壳命令同名）。
+ *
+ * 每个字段都可能是 null / 缺失（后端按分项降级，见 `api::system_info`）：
+ * 界面一律按「—」显示，不猜。`deployment` 是后端判定的运行形态
+ * （desktop / windows-service / docker / systemd / foreground），
+ * `runtime.webviewVersion` 桌面端是 WebView2 / WKWebView、网页端是浏览器内核。
+ */
+export type SystemInfo = {
+  app?: {
+    version?: string | null
+    channel?: string | null
+    schemaVersion?: number | null
+    dbSchemaVersion?: number | null
+    upstreamClientVersion?: string | null
+    upstreamCliVersion?: string | null
+  }
+  runtime?: {
+    deployment?: string | null
+    container?: boolean | null
+    os?: string | null
+    osVersion?: string | null
+    arch?: string | null
+    webviewVersion?: string | null
+    startedAt?: number | null
+    uptimeSeconds?: number | null
+    pid?: number | null
+    debugBuild?: boolean | null
+    verbose?: boolean | null
+  }
+  deployment?: {
+    host?: string | null
+    port?: number | null
+    panelPort?: number | null
+    uiHosted?: boolean | null
+    localPanel?: boolean | null
+    configDir?: string | null
+    dbFile?: string | null
+    dbBytes?: number | null
+    dbAvailable?: boolean | null
+    logFile?: string | null
+    exePath?: string | null
+    installerKind?: string | null
+    selfUpdate?: boolean | null
+    backupAvailable?: boolean | null
+  }
+  security?: {
+    adminRegistered?: boolean | null
+    panelAuth?: boolean | null
+    apiKeyCount?: number | null
+    allowNoKey?: boolean | null
+    v1FailClosed?: boolean | null
+    panelGate?: boolean | null
+    githubTokenFilled?: boolean | null
+    githubTokenOrigin?: string | null
+    updateProxy?: boolean | null
+  }
+  features?: {
+    debugMode?: boolean | null
+    sanitizeFingerprints?: boolean | null
+    cors?: boolean | null
+    developerRoleCompat?: boolean | null
+    keepaliveStrip?: boolean | null
+    autoContinue?: boolean | null
+    autoContinueMaxRounds?: number | null
+    modelsDev?: boolean | null
+    captchaEnabled?: boolean | null
+    updateBeta?: boolean | null
+  }
+  stats?: {
+    accounts?: number | null
+    enabledAccounts?: number | null
+    limitedAccounts?: number | null
+    models?: number | null
+    inFlight?: number | null
+    requests?: number | null
+    logs?: number | null
+    upgradePending?: boolean | null
+  }
+}
+
 /** 导入失败项：customProvider 标记的那条不是账号，是自定义提供商定义 */
 export type ImportError = { id?: string; message?: string; customProvider?: boolean }
 
@@ -233,6 +314,13 @@ export type SettingsBridge = {
   localIp?(): Promise<string | null | undefined>
   /** 打开外链的唯一出口（只放行 http(s)）：桌面走系统浏览器，网页端 shim 是 window.open */
   openReleasePage?(url: string): Promise<unknown>
+  /**
+   * 设置页「版本信息」的一次性读数（桌面壳命令 / 网页端 shim 同名方法）。
+   *
+   * `hideUsername` 是**纯展示**参数：命中的路径在主目录前缀处换成 `~`，
+   * 脱敏在后端做 —— 这样「复制全部信息」拿到的也是脱敏后的文本。
+   */
+  getSystemInfo?(options?: { hideUsername?: boolean }): Promise<SystemInfo | null | undefined>
   // ── 以下成员从 HEAD 恢复（并行改动移走了定义但 settings-state.ts 仍引用）──
     exportDatabase?(includeLogs: boolean): Promise<DatabaseExportResult | null | undefined>
     importDatabase?(): Promise<DatabaseImportResult | null | undefined>
@@ -243,6 +331,16 @@ export type SettingsBridge = {
     getModelsDev(): Promise<ModelsDevState | null | undefined>
     saveModelsDev(on: boolean): Promise<ModelsDevState | null | undefined>
     refreshModelsDev(): Promise<{ result?: ModelsDevRefreshResult; status?: ModelsDevState } | null | undefined>
+    // ── 云同步（设置页「数据 → 云同步」，面板见 settings-cloud-sync.tsx）──
+    // 全部可选：网页端 shim 与桌面桥都提供，但老壳（升级前）没有这几个方法 ——
+    // 面板据此显示「不可用」而不是崩掉。
+    getCloudSync?(): Promise<unknown>
+    saveCloudSync?(payload: Record<string, unknown>): Promise<unknown>
+    testCloudSync?(payload: Record<string, unknown>): Promise<unknown>
+    getCloudSyncRemote?(): Promise<unknown>
+    cloudSyncUpload?(): Promise<unknown>
+    cloudSyncDownload?(): Promise<unknown>
+    importCloudSyncKey?(password: string): Promise<unknown>
 }
 
 /**
@@ -272,6 +370,8 @@ export type SharedWindow = {
   wbUnits?: { isChinese?: () => boolean; setChinese?: (on: boolean) => void }
   /** 软件更新面板的岛（update-panel.tsx）：切到设置页时让它自己刷新一次 */
   wbUpdatePanel?: { load?: () => Promise<void> | void }
+  /** 版本信息面板的岛（system-info-pane.tsx）：同上 */
+  wbSystemInfoPane?: { load?: () => Promise<void> | void }
   /** 内联图标集（icons.js）：左栏分类图标由它渲染（返回 SVG 串，注入用） */
   wbIcons?: { icon?: (name: string, size?: number) => string }
 }
@@ -340,6 +440,11 @@ export const CATEGORIES = [
   { id: 'security', label: t('安全'), icon: 'shield' },
   { id: 'data', label: t('数据'), icon: 'database' },
   { id: 'feedback', label: t('反馈与需求'), icon: 'feedback' },
+  // 「版本信息」：软件版本 / 运行环境 / 路径 / 开关状态 / 关键计数，可一键
+  // 复制成纯文本（面板在 system-info-pane.tsx）。紧挨「反馈与需求」—— 两者
+  // 是同一件事的两端：出问题了先来这儿截图，再去那儿提 issue。
+  // `system` 是新的内部 id，不与任何既有分类 / localStorage 取值冲突。
+  { id: 'system', label: t('版本信息'), icon: 'info' },
   { id: 'about', label: t('更新'), icon: 'download' },
 ] as const
 

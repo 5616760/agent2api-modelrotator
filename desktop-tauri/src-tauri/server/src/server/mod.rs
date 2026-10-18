@@ -292,6 +292,10 @@ impl ServerState {
         if let Some(reason) = config_migration::pending_reason() {
             return Err(reason);
         }
+        // 进程启动时刻：设置页「版本信息」的「已运行」由它算。记录点放在
+        // 最前面 —— 后面每一步都可能耗时（开库、迁移、模型清单预热），
+        // 那些时间同样是「这个进程已经跑了多久」的一部分。
+        crate::server::core::system_info::record_start();
         // Accio 的 OAuth 回调要落在本机端口上，而授权地址由**适配器**拼
         // （`ProviderAdapter::build_login_url` 是同步无参的，拿不到 ServerState）。
         // 端口在进程生命周期内不变，这里写一次、之后只读 —— 与各家 models 的
@@ -401,6 +405,13 @@ impl ServerState {
         // 订阅存储（「订阅管理」维护的订阅链接）：同一个 `Db`（与 proxyPool
         // 同一形态）。位置只要求早于任何一次 `/api/subscriptions*` 请求。
         core::subscriptions::install(db.clone());
+        // 云同步（设置页「数据 → 云同步」）：设置与状态落在 kv 的保留键
+        // `cloudSync`，装库句柄即可。自动同步的工作线程在下面 spawn ——
+        // 必须先装句柄再起线程，否则第一轮读设置会拿到默认值。
+        core::cloud_sync::install(db.clone());
+        if let Some(db) = db.clone() {
+            core::cloud_sync::auto_sync::spawn_worker(db);
+        }
         // 订阅内核（mihomo sidecar）的命令 worker：单条队列串行消费内核操作
         // （下载 / 重建配置 / 重启 / 停止），见 `core::sub_kernel` 的模块头。
         core::sub_kernel::spawn_worker();

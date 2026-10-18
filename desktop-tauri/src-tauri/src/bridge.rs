@@ -649,6 +649,14 @@ const BRIDGE_JS: &str = r#"
     // checkUpdate 走壳命令：当前版本号只有壳知道（后端是独立进程），
     // 由壳把版本带上去交给后端比较
     checkUpdate: () => invoke('check_update'),
+    // 设置页「版本信息」：一次取全（版本 / 环境 / 路径 / 开关 / 计数）。
+    // 桌面端另由壳命令补三件**只有壳知道**的事：运行时 package_info 版本
+    // （后端编译期常量在「装的是哪个包」这件事上不是权威）、WebView2 版本
+    // （界面白屏 / 渲染异常时它是决定性的）、是否 dev 构建。
+    // 与 `web_shim.rs` 的同名方法必须成对存在 —— 少一边时另一半形态会报
+    // 「桥接方法缺失」。
+    getSystemInfo: options =>
+      invoke('system_info', { hideUsername: options?.hideUsername === true }),
     // 最近一次「检查更新」的结果（定时任务写入；app.js 轮询它亮侧栏徽标）
     getUpdateStatus: () => call('GET', '/api/update/status'),
     // 「软件更新」的出网线路：null = 直连。更新面板「检查更新」左侧的下拉读写
@@ -920,6 +928,19 @@ const BRIDGE_JS: &str = r#"
     // 系统对话框；参数名 includeLogs 必须与 Rust 侧 export_database 的形参一致
     exportDatabase: includeLogs => invoke('export_database', { includeLogs }),
     importDatabase: () => invoke('import_database'),
+
+    // ── 云同步（设置页「数据 → 云同步」）──
+    // 上传 / 下载要打外网传几 MB，通用 call 的 60 秒超时不够，所以这两条走
+    // 壳命令（`cloud_sync_upload` / `cloud_sync_download`，内部放宽到 300 秒）；
+    // 其余四条都是小请求，走通用 call 即可。
+    // 密码类字段传空串 = 沿用后端已保存的那份（见 api::cloud_sync 的模块头）。
+    getCloudSync: () => call('GET', '/api/cloud-sync'),
+    saveCloudSync: payload => call('PUT', '/api/cloud-sync', payload || {}),
+    testCloudSync: payload => call('POST', '/api/cloud-sync/test', payload || {}),
+    getCloudSyncRemote: () => call('GET', '/api/cloud-sync/remote'),
+    cloudSyncUpload: () => invoke('cloud_sync_upload'),
+    cloudSyncDownload: () => invoke('cloud_sync_download'),
+    importCloudSyncKey: password => invoke('cloud_sync_import_key', { password }),
   };
 })();
 "#;

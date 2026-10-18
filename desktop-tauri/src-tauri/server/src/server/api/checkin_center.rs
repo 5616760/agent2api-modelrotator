@@ -28,7 +28,7 @@
 //!   "daily": {
 //!     "providers": [ { "id", "label",
 //!                      "accounts": [ { "id", "name", "available", "checkinAt",
-//!                                      "checkedInToday" } ],
+//!                                      "checkedInToday", "streakDays" } ],
 //!                      "doneCount", "totalCount" } ],
 //!     "outOfScope": [ { "label", "reason", "count" } ],
 //!     "todayDone": 6, "todayEligible": 9
@@ -149,6 +149,10 @@ pub async fn get_center(State(state): State<ServerState>) -> Response {
                 // 版本（cn / intl，缺失 null）：WorkBuddy 国际版在这张表里执行的是
                 // 「领日活」（活跃保活），按钮文案与提示要跟国内版的「签到」分开
                 "edition": account.get("edition").cloned().unwrap_or(Value::Null),
+                // 成长中心连登天数（WorkBuddy 国内版；签到后回读落库，见
+                // `AccountStore::mark_streak_days`）。恒为数字（0 = 还没读到过），
+                // 与公开形态同一口径 —— 界面按数字读，不必判「字段缺失」。
+                "streakDays": account.get("streakDays").cloned().unwrap_or(Value::from(0)),
             }));
         } else {
             let label = crate::server::core::providers::label_of(&provider);

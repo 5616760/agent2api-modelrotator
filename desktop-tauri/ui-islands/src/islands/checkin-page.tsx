@@ -142,9 +142,18 @@ function AccountRows({ group }: { group: CheckinProviderGroup }) {
           // WorkBuddy 的日活接口（上游稳定 400「该账号不是 WorkBuddy 国际版
           // 账号」）。只有 `workbuddy-intl` 这一组执行日活链。
           const dailyActivity = group.id === 'workbuddy-intl'
+          // 成长中心连登天数（WorkBuddy 国内版）：签到后顺带发的那条每日活跃
+          // 上报点亮它，后端回读后落库（`streakDays`），这里只读不查上游。
+          // 0 = 还没读到过（新账号 / 首次签到还没跑），不显示成「连登 0 天」。
+          const streakDays = group.id === 'workbuddy' && account.streakDays ? account.streakDays : 0
           return (
             <tr key={account.id}>
-              <td>{account.name || account.id}</td>
+              <td>
+                {account.name || account.id}
+                {streakDays > 0 ? (
+                  <span className='text-subtle'> · {t('连登 {n} 天', { n: streakDays })}</span>
+                ) : null}
+              </td>
               <td>
                 {account.checkedInToday
                   ? <Badge variant='success' shape='tag'>{t('已签')}</Badge>

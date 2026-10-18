@@ -3,6 +3,7 @@ import { PageIntro, IconButton, Badge, Empty, ErrorNote, SkeletonList } from '..
 import { ProviderLogo, GlyphLogo } from '../components/ProviderLogo'
 import { Icon } from '../components/Icon'
 import { PullIndicator, usePullToRefresh } from '../components/PullToRefresh'
+import { OnboardingSheet, ZcodePlansSheet } from '../components/CheckinClaimSheets'
 import { store } from '../state/store'
 import { fetchCheckinCenter, runCheckin, type CheckinCenter } from '../api/gateway'
 import { formatRelative, formatStamp, isToday } from '../lib/format'
@@ -25,6 +26,14 @@ export function CheckinPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
+  /** 打开领取抽屉的账号（两类福利各自一份，互斥出现） */
+  const [onboarding, setOnboarding] = useState<{ id: string; name?: string; provider?: string } | null>(null)
+  const [plans, setPlans] = useState<{
+    id: string
+    name?: string
+    provider?: string
+    claimPlans?: Record<string, number> | null
+  } | null>(null)
 
   const load = async () => {
     try {
@@ -284,35 +293,81 @@ export function CheckinPage() {
               </div>
               <div className='m-card'>
                 {(data.extras?.onboarding || []).map(item => (
-                  <div key={item.id} className='m-row'>
+                  <button
+                    key={item.id}
+                    type='button'
+                    className='m-row'
+                    onClick={() =>
+                      setOnboarding({
+                        id: String(item.id || ''),
+                        name: item.name,
+                        provider: item.provider,
+                      })
+                    }
+                  >
                     <ProviderLogo id={item.provider} />
                     <div className='m-grow'>
                       <div className='m-t1'>{item.name || item.id}</div>
-                      <div className='m-t2'>{t('新手任务')}</div>
+                      <div className='m-t2'>
+                        {item.settled ? t('一次性福利已结清') : t('新手任务')}
+                      </div>
                     </div>
-                    <Badge tone='brand'>{t('去领取')}</Badge>
-                  </div>
+                    {item.settled ? (
+                      <Badge tone='mute'>{t('已领取')}</Badge>
+                    ) : (
+                      <Badge tone='brand'>{t('去领取')}</Badge>
+                    )}
+                    <span className='m-chev'>
+                      <Icon name='chev' />
+                    </span>
+                  </button>
                 ))}
                 {(data.extras?.plans || []).map(item => (
-                  <div key={item.id} className='m-row'>
+                  <button
+                    key={item.id}
+                    type='button'
+                    className='m-row'
+                    onClick={() =>
+                      setPlans({
+                        id: String(item.id || ''),
+                        name: item.name,
+                        provider: item.provider,
+                        claimPlans: item.claimPlans,
+                      })
+                    }
+                  >
                     <ProviderLogo id={item.provider} />
                     <div className='m-grow'>
                       <div className='m-t1'>{item.name || item.id}</div>
                       <div className='m-t2'>{t('套餐领取')}</div>
                     </div>
-                    <Badge tone={item.claimAt ? 'mute' : 'brand'}>
-                      {item.claimAt ? t('已领') : t('可领')}
+                    <Badge tone={isToday(item.claimAt || undefined) ? 'mute' : 'brand'}>
+                      {isToday(item.claimAt || undefined) ? t('今日已领') : t('可领')}
                     </Badge>
-                  </div>
+                    <span className='m-chev'>
+                      <Icon name='chev' />
+                    </span>
+                  </button>
                 ))}
               </div>
               <div style={{ marginTop: 8, fontSize: 11.5, color: 'var(--m-text-3)', padding: '0 2px' }}>
-                {t('福利与套餐的逐项领取在桌面端签到中心完成')}
+                {t('点进去查看任务并领取')}
               </div>
             </div>
           ) : null}
         </>
       ) : null}
+
+      <OnboardingSheet
+        account={onboarding}
+        onClose={() => setOnboarding(null)}
+        onChanged={() => void load()}
+      />
+      <ZcodePlansSheet
+        account={plans}
+        onClose={() => setPlans(null)}
+        onChanged={() => void load()}
+      />
     </div>
   )
 }

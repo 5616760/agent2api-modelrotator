@@ -326,6 +326,27 @@ pub fn shim_js() -> &'static str {
     }
   }
 
+  // ── 浏览器内核版本（设置页「版本信息」用）────────────────────
+  // 桌面端由壳给 WebView2 / WKWebView 的版本；网页端只能从 UA 里认：
+  // Chrome/Edge/Opera 都是 `Chrome/<ver>`、Firefox 是 `Firefox/<ver>`、
+  // Safari 是 `Version/<ver> … Safari/`。认不出就给空串 —— 界面显示「—」，
+  // 不编造一个看起来像版本号的字符串。
+  function browserEngineVersion() {
+    var ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+    var patterns = [
+      [/Edg(?:e|A|iOS)?\/(\d+(?:\.\d+)*)/, 'Edge '],
+      [/OPR\/(\d+(?:\.\d+)*)/, 'Opera '],
+      [/Chrome\/(\d+(?:\.\d+)*)/, 'Chrome '],
+      [/Firefox\/(\d+(?:\.\d+)*)/, 'Firefox '],
+      [/Version\/(\d+(?:\.\d+)*).*Safari/, 'Safari '],
+    ];
+    for (var i = 0; i < patterns.length; i += 1) {
+      var match = patterns[i][0].exec(ua);
+      if (match) return patterns[i][1] + match[1];
+    }
+    return '';
+  }
+
   // ── 错误归一（与桌面 bridge 的 asError 同语义）─────────────
   function asError(failure) {
     if (failure instanceof Error) return failure;
@@ -1171,6 +1192,23 @@ pub fn shim_js() -> &'static str {
     // ── 软件更新（检查 / 下载 / 容器内更新；只有「跑安装程序」是桌面专有）──
     checkUpdate: function () { return invokeShell('check_update'); },
     getUpdateStatus: function () { return call('GET', '/api/update/status'); },
+    // 设置页「版本信息」：与桌面 bridge 的同名方法成对存在（两边必须一起加，
+    // 少一边时那一半形态会报「桥接方法缺失」）。网页端没有壳侧的
+    // package_info / WebView 版本，这里补的是**浏览器**那份：
+    //   · runtime.webviewVersion ← 浏览器内核版本（从 UA 里取，取不到给空串）；
+    //   · app.version 不覆盖 —— 网页端没有「装的是哪个包」这回事，
+    //     后端编译期版本就是唯一真值。
+    // 脱敏开关走查询参数（后端做，见 api::system_info 的模块头）。
+    getSystemInfo: function (options) {
+      var hide = !!(options && options.hideUsername);
+      return call('GET', '/api/system-info' + (hide ? '?hideUsername=1' : ''))
+        .then(function (info) {
+          if (info && info.runtime) {
+            info.runtime.webviewVersion = browserEngineVersion();
+          }
+          return info;
+        });
+    },
     // 「软件更新」的出网线路（null = 直连）：与桌面 bridge 对齐，面板下拉读写
     getUpdateProxy: function () { return call('GET', '/api/update/proxy'); },
     setUpdateProxy: function (payload) { return call('POST', '/api/update/proxy', payload); },
@@ -1335,6 +1373,19 @@ pub fn shim_js() -> &'static str {
 
     // ── 数据存储概况 ──
     getStorage: function () { return call('GET', '/api/storage'); },
+
+    // ── 云同步（设置页「数据 → 云同步」）──
+    // 桌面端的上传 / 下载走壳命令（为了放宽超时），网页端直接打接口：
+    // fetch 没有总超时，长传输由服务端自己的传输层预算控制。
+    getCloudSync: function () { return call('GET', '/api/cloud-sync'); },
+    saveCloudSync: function (payload) { return call('PUT', '/api/cloud-sync', payload || {}); },
+    testCloudSync: function (payload) { return call('POST', '/api/cloud-sync/test', payload || {}); },
+    getCloudSyncRemote: function () { return call('GET', '/api/cloud-sync/remote'); },
+    cloudSyncUpload: function () { return call('POST', '/api/cloud-sync/upload', {}); },
+    cloudSyncDownload: function () { return call('POST', '/api/cloud-sync/download', {}); },
+    importCloudSyncKey: function (password) {
+      return call('POST', '/api/cloud-sync/import-key', { password: password });
+    },
 
     // ── 数据结构升级 ──
     getUpgrade: function () { return call('GET', '/api/upgrade'); },

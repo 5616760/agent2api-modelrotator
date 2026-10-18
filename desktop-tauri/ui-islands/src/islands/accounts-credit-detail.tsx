@@ -392,7 +392,11 @@ export function CreditDetailButton({ rows, subscriptionLine, variant, kind, titl
                 title={t('展开或收起（默认收起）')}
                 onClick={() => setSpentOpen(value => !value)}
               >
-                <span className='caret' aria-hidden>▾</span>
+                {/* ⚠️ 这个 span 必须**空着**：三角由 CSS 的 border 画
+                    （见 page-accounts-table.css 的 .usage-pop-spent-head .caret），
+                    里面再塞一个 ▾ 字形就会叠出两个箭头 —— 一个 border 画的、
+                    一个字形溢出的（width/height 是 0，字形照样画得出来）。 */}
+                <span className='caret' aria-hidden />
                 <span>{t('已用完 / 已过期')}</span>
                 <span className='n'>{t('{count} 份', { count: spentRows.length })}</span>
               </button>

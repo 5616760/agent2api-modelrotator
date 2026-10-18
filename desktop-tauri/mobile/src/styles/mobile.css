@@ -162,6 +162,13 @@ button { font: inherit; color: inherit; }
   to { opacity: 1; transform: none; }
 }
 
+/* 助手流式输出时那颗闪动的光标（见 pages/AssistantPage 的 streaming 分支）。
+   两步切换而不是淡入淡出：方块光标本来就该是硬闪，和终端一致。 */
+@keyframes m-caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
 /*
  * 固定头部 + 独立滚动列表。
  *

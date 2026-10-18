@@ -132,6 +132,11 @@ function apkBundle(): Plugin {
  */
 export default defineConfig(({ mode }) => {
   const apk = mode === 'apk'
+  // 本工程版本号：与 android/variables.gradle 读的是同一个 package.json 字段
+  // （APK 的 versionName 也来自它），设置页「关于」与「检查更新」用这个值。
+  const pkgVersion = JSON.parse(
+    fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'),
+  ).version as string
   return {
     plugins: apk
       ? [react(), tailwindcss(), apkBundle()]
@@ -144,6 +149,8 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       'process.env.NODE_ENV': JSON.stringify('production'),
+      // 构建期注入版本号：避免运行期再去请求 package.json（APK 里根本没有它）
+      __APP_VERSION__: JSON.stringify(pkgVersion),
     },
     build: {
       outDir: apk ? 'android-www' : '../ui/m',

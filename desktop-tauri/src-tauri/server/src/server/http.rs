@@ -346,6 +346,13 @@ pub fn panel_router(state: ServerState) -> Router {
         // 改造前的两条写路由（relocate / progress）随「三类数据各自一个目录」
         // 的语义一起删除，理由见 `api::storage_api` 的模块头。
         .route("/api/storage", get(api::storage_api::get_storage))
+        // ── 设置页「版本信息」──
+        // 一次取全：版本 / 环境 / 路径 / 开关状态 / 关键计数（见 api::system_info
+        // 的模块头）。挂 protected —— 数据目录、可执行文件路径与 Key 数量都属于
+        // 管理面信息；免鉴权会把部署结构暴露给任何能访问端口的人。
+        // `?hideUsername=1` 是**纯展示**参数（主目录前缀换成 `~`），由后端做
+        // 脱敏，这样界面「复制全部信息」拿到的也是脱敏后的文本。
+        .route("/api/system-info", get(api::system_info::get_system_info))
         // ── 数据结构升级（旧 JSON/JSONL → 统一 SQLite 库）──
         // 启动时**不自动迁移**，由用户在弹窗里点「升级」触发（需求：必须让用户
         // 知道数据换了存储形态、旧数据保留）。挂 protected：run 会写库里的
@@ -358,6 +365,23 @@ pub fn panel_router(state: ServerState) -> Router {
         // （大文件不过 HTTP，见 api::backup_api 的模块头）。
         .route("/api/backup/export", post(api::backup_api::export_backup))
         .route("/api/backup/import", post(api::backup_api::import_backup))
+        // ── 云同步（设置页「数据 → 云同步」）──
+        // 挂 protected：上传把全部账号密文与网关 Key 送到远端，下载整体替换
+        // 本机业务数据，保存写入远端凭据 —— 三者都是 /api/config 级别敏感。
+        // 上传 / 下载要打外网传几 MB，壳侧为它们单独放宽了超时（见
+        // `commands::cloud_sync_upload` / `cloud_sync_download`）。
+        .route(
+            "/api/cloud-sync",
+            get(api::cloud_sync::get_settings).put(api::cloud_sync::put_settings),
+        )
+        .route("/api/cloud-sync/test", post(api::cloud_sync::post_test))
+        .route("/api/cloud-sync/remote", get(api::cloud_sync::get_remote))
+        .route("/api/cloud-sync/upload", post(api::cloud_sync::post_upload))
+        .route("/api/cloud-sync/download", post(api::cloud_sync::post_download))
+        .route(
+            "/api/cloud-sync/import-key",
+            post(api::cloud_sync::post_import_key),
+        )
         // ── 账号管理（对照 workbuddy-account-routes.mjs）──
         // 用 any(...) 注册两条入口（无尾段 + 通配尾段），方法/路径的判定交给
         // api::accounts::dispatch —— 这是为了复刻 Node 版 tryHandle 的判定顺序

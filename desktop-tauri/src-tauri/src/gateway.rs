@@ -213,16 +213,31 @@ pub fn management_key() -> Option<String> {
     read_api_key()
 }
 
-fn client() -> Result<reqwest::Client, String> {
+/// 指定总超时的 Client。
+///
+/// ── 为什么云同步要单独放宽 ──────────────────────────────────
+/// 通用 60 秒是给「管理 API 小请求」定的；云同步的上传 / 下载要打外网传几 MB，
+/// 慢速云盘上 60 秒根本不够。放宽的是**这一条命令**的超时，不是全局 ——
+/// 其它管理请求仍应快速失败（卡住的面板比报错更难排查）。
+fn client_with_timeout(timeout_ms: u64) -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
-        .timeout(Duration::from_millis(REQUEST_TIMEOUT_MS))
+        .timeout(Duration::from_millis(timeout_ms))
         .build()
         .map_err(|error| format!("创建 HTTP 客户端失败: {error}"))
 }
 
 fn request_builder(method: &str, path: &str, body: Option<&Value>) -> Result<reqwest::RequestBuilder, String> {
+    request_builder_with_timeout(method, path, body, REQUEST_TIMEOUT_MS)
+}
+
+fn request_builder_with_timeout(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout_ms: u64,
+) -> Result<reqwest::RequestBuilder, String> {
     let url = format!("http://127.0.0.1:{}{path}", proxy_port());
-    let base = client()?;
+    let base = client_with_timeout(timeout_ms)?;
     let mut builder = match method.to_uppercase().as_str() {
         "GET" => base.get(&url),
         "POST" => base.post(&url),
@@ -252,6 +267,30 @@ fn request_builder(method: &str, path: &str, body: Option<&Value>) -> Result<req
 /// 发一次管理请求，返回解包后的 data
 pub async fn call(method: &str, path: &str, body: Option<&Value>) -> Result<Value, String> {
     let builder = request_builder(method, path, body)?;
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| describe_transport_error(&error))?;
+    let status = response.status().as_u16();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| format!("读取响应失败: {error}"))?;
+    unwrap_envelope(&text, status)
+}
+
+/// 与 [`call`] 同形，但用指定的总超时。
+///
+/// 只服务云同步的上传 / 下载（打外网、传几 MB，60 秒不够）。超时值由调用方
+/// 给：壳命令那边是一个具名常量，不在这里写死 —— 将来若别处也需要长请求，
+/// 各自声明自己的预算，比在一个全局旋钮上调大更可控。
+pub async fn call_with_timeout(
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout_ms: u64,
+) -> Result<Value, String> {
+    let builder = request_builder_with_timeout(method, path, body, timeout_ms)?;
     let response = builder
         .send()
         .await

@@ -244,8 +244,16 @@ export type CheckinCenter = {
     todayEligible?: number
   }
   extras?: {
-    onboarding?: Array<{ id?: string; name?: string; provider?: string }>
-    plans?: Array<{ id?: string; name?: string; provider?: string; claimAt?: number }>
+    /** 新手福利：`settled` 非空 = 一次性福利已结清（零上游即可渲染） */
+    onboarding?: Array<{ id?: string; name?: string; provider?: string; settled?: unknown }>
+    /** ZCode 活动套餐：`claimPlans` 是本地领取台账 `{planId: 毫秒}` */
+    plans?: Array<{
+      id?: string
+      name?: string
+      provider?: string
+      claimAt?: number | null
+      claimPlans?: Record<string, number> | null
+    }>
   }
   auto?: { enabled?: boolean; time?: string; providers?: string[] }
   history?: Array<{
@@ -267,6 +275,138 @@ export function fetchCheckinCenter(signal?: AbortSignal): Promise<CheckinCenter>
 /** 批量签到（不带 id = 全部可签账号） */
 export function runCheckin(id?: string): Promise<unknown> {
   return apiCall('/api/accounts/checkin', { method: 'POST', body: id ? { id } : {} })
+}
+
+/* ─── 新手福利（一次性任务） ─────────────────────── */
+
+export type OnboardingTask = {
+  key?: string
+  title?: string
+  group?: string
+  points?: number
+  done?: boolean
+  blocked?: boolean
+}
+
+export type OnboardingStatus = {
+  tasks?: OnboardingTask[]
+  earned?: number
+  total?: number
+  unclaimed?: number
+  /** 一次性福利已全部结清：界面此后按本地记忆渲染，不再查上游 */
+  settled?: boolean
+  settledAt?: number | null
+  /** OfficeAce 之类会回一句「本次到账 N 积分」，有就优先显示它 */
+  message?: string
+}
+
+/**
+ * 新手福利任务状态。
+ *
+ * `refresh = true` 才真的去问上游（桌面端「查询任务」那颗按钮的语义）；
+ * 平时走服务端的结算记忆，零上游请求。
+ */
+export function fetchOnboarding(id: string, refresh = false): Promise<OnboardingStatus> {
+  const suffix = refresh ? '?refresh=1' : ''
+  return apiCall<OnboardingStatus>(`/api/accounts/${encodeURIComponent(id)}/onboarding${suffix}`)
+}
+
+export type OnboardingClaimResult = OnboardingStatus & {
+  results?: Array<{ key?: string; ok?: boolean; already?: boolean; error?: string }>
+  claimed?: number
+  failed?: number
+  claimedPoints?: number
+}
+
+/** 一键领取全部未完成的新手任务（服务端幂等，重复点不会重复加分） */
+export function claimOnboarding(id: string): Promise<OnboardingClaimResult> {
+  return apiCall<OnboardingClaimResult>(`/api/accounts/${encodeURIComponent(id)}/onboarding/claim`, {
+    method: 'POST',
+    body: {},
+  })
+}
+
+/* ─── ZCode 活动套餐 ─────────────────────────────── */
+
+export type ZcodePlan = {
+  planId?: string
+  name?: string
+  description?: string
+  priority?: number
+  startsAt?: number
+  endsAt?: number
+  entitlements?: Array<{
+    showName?: string
+    unitType?: string
+    grantUnits?: number
+    period?: string
+    effectiveAt?: number
+  }>
+}
+
+export type ZcodePreview = {
+  plans?: ZcodePlan[]
+  /** false = 上游活动接口还没部署（活动未开始，不是错误） */
+  deployed?: boolean
+  activated?: boolean | null
+  activationError?: string | null
+}
+
+/** 探测可领套餐（只读；列表为空时后端会补报一次激活事件再重探） */
+export function previewZcodePlans(id: string): Promise<ZcodePreview> {
+  return apiCall<ZcodePreview>(`/api/accounts/${encodeURIComponent(id)}/zcode-claim/preview`, {
+    method: 'POST',
+    body: {},
+  })
+}
+
+export type ZcodeCaptchaConfig = {
+  enabled?: boolean
+  prefix?: string
+  sceneId?: string
+  region?: string
+  skipModelRequest?: boolean
+}
+
+/** 上游此刻要不要滑块验证码（不要就别弹） */
+export function fetchZcodeCaptchaConfig(id: string): Promise<ZcodeCaptchaConfig> {
+  return apiCall<ZcodeCaptchaConfig>(
+    `/api/accounts/${encodeURIComponent(id)}/zcode-claim/captcha-config`,
+    { method: 'POST', body: {} },
+  )
+}
+
+export type ZcodeClaimResult = {
+  ok?: boolean
+  planId?: string
+  startsAt?: number
+  endsAt?: number
+  claimedAt?: number
+  /** 失败语义键：already_claimed / quota_exhausted / captcha … */
+  failure?: string
+  /** 后端归一过的中文失败原因（界面直接显示，不再自己写一套） */
+  failureLabel?: string
+  code?: number
+  message?: string
+  failureEndsAt?: number
+  activated?: boolean | null
+  activationError?: string | null
+}
+
+/**
+ * 领取一份套餐。
+ *
+ * 注意失败也走 200（`ok: false` + `failure`）——「已领过」「额度用尽」都是
+ * 正常业务结果，不是 HTTP 错误，所以调用方要读 `ok` 而不是只 catch。
+ */
+export function claimZcodePlan(
+  id: string,
+  payload: { planId?: string; captchaVerifyParam?: string; captchaRegion?: string },
+): Promise<ZcodeClaimResult> {
+  return apiCall<ZcodeClaimResult>(`/api/accounts/${encodeURIComponent(id)}/zcode-claim`, {
+    method: 'POST',
+    body: payload,
+  })
 }
 
 /* ─── 模型管理 ─────────────────────────────────── */

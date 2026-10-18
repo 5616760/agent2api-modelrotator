@@ -509,7 +509,82 @@ pub async fn checkin_for(
                 .claim_daily_checkin(Some(&entry.session))
                 .await
                 .map_err(|error| error.message);
-            let mut row = claim_result(id, name, &display, false, claim);
+            let mut row = claim_result(id.clone(), name, &display, false, claim);
+            // ── 每日活跃上报：点亮成长中心连登 / 活跃地图 ──────────────
+            // 签到（`daily-checkin`）只推进**签到活动**自己的连签，成长中心的
+            // 连登与热力图只认 `/v2/report` 的一条 `chat_request_send` 事件
+            // （2026-10-19 实测：签到后签到连签 14→15，而 `growth/streak`
+            // 的 days 与当日热力格一格未动；补发一条上报后 0→1 / 0→2）。
+            // 见 `growth::daily_activity` 的模块头。
+            //
+            // 结果落在行的 `growth` 键上，**刻意不叫 `activity`**：那个键是
+            // 国际版日活链路的读数，`day_completed` / 台账会把它当成「今天
+            // 已完成」—— 对国内版，上报只点亮地图，不等于积分领到了，
+            // 混用会让签到失败的账号被记成已签。
+            //
+            // 企业版没有个人成长体系（`/activity/growth/*` 一律 403），
+            // 与下面两条一次性奖励同一门控；上报对它零收益（上游仍回 200）。
+            if !is_enterprise_session(&entry.session) {
+                let growth_row = match crate::server::core::providers::workbuddy::growth::GrowthAccount::from_store(store, &id) {
+                    Some(growth_account) => {
+                        match crate::server::core::providers::workbuddy::growth::daily_activity::report(
+                            &growth_account,
+                        )
+                        .await
+                        {
+                            Ok(report) => {
+                                // 连登天数落库：签到中心 / 账号页读它，不必每次
+                                // 打开都打一发上游。写盘失败只记日志（同 mark_checkin）。
+                                if let Some(days) = report.streak_days {
+                                    if !store.mark_streak_days(&id, days) {
+                                        logging::verbose(
+                                            "[Accounts]",
+                                            &format!("账号 {id} 的连登天数未能落盘"),
+                                        );
+                                    }
+                                }
+                                if report.sent {
+                                    logging::verbose(
+                                        "[Accounts]",
+                                        &format!(
+                                            "账号 {display}: 每日活跃已上报{}",
+                                            report
+                                                .streak_days
+                                                .map(|days| format!("（连登 {days} 天）"))
+                                                .unwrap_or_default()
+                                        ),
+                                    );
+                                }
+                                json!({
+                                    "reported": report.sent,
+                                    "streakDays": report.streak_days.map(Value::from).unwrap_or(Value::Null),
+                                    "error": Value::Null,
+                                })
+                            }
+                            // 附加收益失败：只记日志，绝不影响签到结果
+                            Err(error) => {
+                                logging::verbose(
+                                    "[Accounts]",
+                                    &format!("账号 {display} 每日活跃上报失败: {error}"),
+                                );
+                                json!({
+                                    "reported": false,
+                                    "streakDays": Value::Null,
+                                    "error": error,
+                                })
+                            }
+                        }
+                    }
+                    None => json!({
+                        "reported": false,
+                        "streakDays": Value::Null,
+                        "error": "没有可用凭证",
+                    }),
+                };
+                if let Some(object) = row.as_object_mut() {
+                    object.insert("growth".to_string(), growth_row);
+                }
+            }
             // ── 一次性运营奖励：挂在签到末尾顺带领 ────────────────
             // 新手礼包与活动补偿（如 2026-10 的 DeepSeek 故障补偿 500 积分）
             // 都没有自己的入口，官方口径是去「用量管理 / 个人中心」手动点领取
