@@ -50,6 +50,13 @@ export type RateLimitInfo = {
   status?: number | string
   code?: string | number
   resetAt?: number
+  /**
+   * **触发时刻**（毫秒）：`store_admin::mark_rate_limited` 每次落盘都会写。
+   * 与 `resetAt` 合起来才知道这条冷却是多长、走到了哪儿 —— 限流明细里那条
+   * 「冷却进度」线读的就是它。旧版本落盘的记录可能没有这个键，那时进度线不画
+   * （`progress: null`），其余读数照旧。
+   */
+  at?: number
   message?: string
 }
 
@@ -209,13 +216,6 @@ export type UsageEntry = null | string | Record<string, unknown> | undefined
 
 /** 列的对齐档（与 table-col-settings 的 Align 同一套取值） */
 export type Align = 'left' | 'center' | 'right'
-
-/**
- * 行内明细面板的 kind。**只剩「限流明细」一种**：签到曾也有一个明细面板，
- * 已随表格化删除；账号页的签到按钮又整体迁去了「签到中心」，行内面板
- * 与签到从此互不相干。
- */
-export type PanelKind = 'limits'
 
 /* ─── Loomy 新手任务 ─────────────────────────
  *

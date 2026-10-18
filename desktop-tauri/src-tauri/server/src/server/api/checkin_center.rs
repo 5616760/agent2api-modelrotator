@@ -93,6 +93,13 @@ fn account_display_name(account: &Value) -> String {
 /// 判据改了这里要跟着改 —— 两处写的都是「这个账号为什么不能签到」。
 fn out_of_scope_reason(account: &Value) -> &'static str {
     let provider = account_text(account, "provider");
+    // 智谱清言的**访客账号**：与「没有签到链路」是两回事 —— 上游这一站有签到
+    // （登录账号就能签），只是访客没有积分体系（相关接口对访客一律 401）。
+    // 判在 provider / edition 之前：本家的 edition 恒 cn，不会与下面那条撞；
+    // 文案与 `resolve_checkin_targets` 单账号拒绝时那句同义。
+    if account.get("isGuest").and_then(Value::as_bool) == Some(true) {
+        return "访客账号没有积分体系";
+    }
     // WorkBuddy / Qoder 两个地区的国际版都在 `supports_checkin` 里显式放行
     //（前者走日活链、后者带风控领积分），还落在范围外的 intl 只可能是 Accio。
     if account.get("edition").and_then(Value::as_str) == Some("intl") {

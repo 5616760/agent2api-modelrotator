@@ -24,7 +24,7 @@
  * checkin-state.ts，签到完成后自动处理的那条链也在那边。）
  */
 
-import { shared, type AccountRecord, type AccountsSnapshot, type ClashSnapshot, type PanelKind } from './accounts-shared'
+import { shared, type AccountRecord, type AccountsSnapshot, type ClashSnapshot } from './accounts-shared'
 import {
   accountGroups, byPriorityOrder, filterCounts, matchesFilter, positionMap, providerSummaries,
   visibleAccounts, type AccountFilter, type AccountGroup, type TokenUsageLookup, type UsageLookup,
@@ -43,7 +43,6 @@ export type AccountsStore = {
   /** 折叠起来的分组（provider id）。列表长了之后「只看某几家」靠它，见页头那颗按钮 */
   collapsed: ReadonlySet<string>
   selected: ReadonlySet<string>
-  panels: ReadonlyMap<string, ReadonlySet<PanelKind>>
   connections: ReadonlyMap<string, number>
   /** Clash 出口列表缓存（`null` = 还没读到）；**只有代理表单的 Clash 直引档用**
    *  （存量配置专用）—— 账号页的代理下拉列的是「网络代理」页的池条目 */
@@ -111,7 +110,6 @@ let store: AccountsStore = {
   filter: loadFilter(),
   collapsed: loadCollapsed(),
   selected: new Set<string>(),
-  panels: new Map<string, ReadonlySet<PanelKind>>(),
   connections: new Map<string, number>(),
   clash: null,
   dialog: null,
@@ -349,36 +347,6 @@ export function setAllPicked(ids: string[], picked: boolean): void {
 
 export function clearSelection(): void {
   patch({ selected: new Set<string>() })
-}
-
-/* ─── 行内明细面板的展开态 ─────────────────────
- * 这一份 Map 是「面板开着没」的**唯一判据来源**：单账号按钮、批量展开、渲染三处都只读它，
- * 谁都不自己另存一份布尔量。以后再加入口也必须走这里的函数，否则这条保证就断了。
- * 余额没有明细行（读数直接落在余额列上），所以只有 limits / checkin 两种 kind。 */
-
-export function panelOpen(id: string, kind: PanelKind): boolean {
-  return store.panels.get(id)?.has(kind) === true
-}
-
-export function setPanelOpen(id: string, kind: PanelKind, open: boolean): void {
-  if (!id) return
-  const panels = new Map(store.panels)
-  const set = new Set(panels.get(id) || [])
-  if (open) set.add(kind)
-  else set.delete(kind)
-  if (set.size) panels.set(id, set)
-  else panels.delete(id)
-  patch({ panels })
-}
-
-export function openPanelsFor(ids: string[], kind: PanelKind): void {
-  const panels = new Map(store.panels)
-  for (const id of ids) {
-    const set = new Set(panels.get(id) || [])
-    set.add(kind)
-    panels.set(id, set)
-  }
-  patch({ panels })
 }
 
 /* ─── 账号名隐藏 ─────────────────────────────── */

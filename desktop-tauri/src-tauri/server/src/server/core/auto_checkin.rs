@@ -146,7 +146,9 @@ pub const CHECKIN_PROVIDERS: [&str; 17] = [
     // 插在中间会让所有存量用户的清单顺序变一下（没有功能影响，但没必要动）。
     "codearts",
     // 智谱清言：「每日登录积分」即本家的签到（`chatglm::checkin`）。
-    // 访客账号会被实现判成中性未领取（没有积分体系），不算失败。
+    // **访客账号不在本链范围内** —— 访客没有积分体系（相关接口对访客一律 401），
+    // 由 `billing::checkin::supports_checkin` 的 `isGuest` 分支排除，改在签到
+    // 中心的「不参与每日签到」里如实说明原因（见那里的说明）。
     "chatglm",
     // ModelScope（魔搭）两个站点：签到就是调一次登录信息接口
     // （`GET {网页站}/api/v1/users/login/info`，调用即触发当日魔粒，幂等），

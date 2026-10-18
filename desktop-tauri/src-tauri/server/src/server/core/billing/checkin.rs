@@ -104,6 +104,22 @@ pub fn supports_checkin(account: &Value) -> bool {
     // 上面那条按 `edition` 的 intl 一刀切与本家无关（它没有版本概念，恒 cn）。
     // Trae 曾与 CodeArts 同列排除表；SOLO 转积分制后模型调用花的就是签到钱包
     // 那份钱，它已在 `providers::trae::checkin` 接入本链，不要再加回来。
+    //
+    // ── 智谱清言的**访客账号**不在签到范围 ──────────────────────
+    // 访客没有积分体系：上游对每日登录积分 / 积分活动 / 任务中心一律 401
+    // （实测，见 `providers::chatglm::checkin` 的模块头），所以它进本链的
+    // **唯一**后果是负面的 —— 永远显示「待签」、把「今日签到进度」的分母
+    // 撑大（`checkin_center` 按本判据分组），并在签到记录台账里每天落一条
+    // 失败（那句中性文案不在 `claim_pending` 的白名单里）。因此按访客形态
+    // 排除，改由签到中心的「不参与每日签到」如实说明原因
+    // （`api::checkin_center::out_of_scope_reason`）—— 静默消失比签不上更糟。
+    //
+    // 判据读公开形态的 `isGuest`（`store_view::public_account` 只对本家注入，
+    // 见那里的说明）：**必须走公开形态**，因为签到中心的分组与批量签到的
+    // 目标解析读的是同一份快照 —— 判据只此一处，两处才不会分叉。
+    if account.get("isGuest").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
     !crate::server::core::account_store::is_accio_family(provider)
 }
 
@@ -192,7 +208,17 @@ pub fn resolve_checkin_targets(
         // 唯一的拒绝理由：上游这一站根本没有签到/活跃任务（Qoder 等的国际版）。
         // 文案与签到中心「范围外」分组那句同义 —— 两处说法不一致会让用户以为
         // 遇到的是两个不同的问题。WorkBuddy 国际版已由活跃任务分支放行。
+        //
+        // 访客单独给一句：它「不支持签到」的原因与别家不同（不是这一站没接链
+        // 路，而是访客本来就没有积分体系），用户看到「该账号暂不支持签到」
+        // 会去翻设置找原因。文案与签到中心的范围外原因同义。
         if !supports_checkin(&found[0]) {
+            if found[0].get("isGuest").and_then(Value::as_bool) == Some(true) {
+                return Err(CheckinError::new(
+                    "访客账号没有积分体系，仅登录账号可签到",
+                    400,
+                ));
+            }
             return Err(CheckinError::new("该账号暂不支持签到或每日活跃任务", 400));
         }
         return Ok((found, 0));
@@ -392,8 +418,9 @@ pub async fn checkin_for(
         "chatglm" => {
             // 智谱清言：本家的「签到」是**每日登录积分**
             // （`POST /chatglm/member-api/member/daily_login_score`，返回
-            // `result.score` 为本次到账数）。访客账号没有积分体系，实现如实
-            // 返回中性未领取（`success:false` + 说明文案），不落失败台账 ——
+            // `result.score` 为本次到账数）。**访客账号到不了这里** —— 它已被
+            // `supports_checkin` 的 `isGuest` 分支排除在签到范围外（没有积分
+            // 体系，相关接口对访客一律 401），实现里的访客分支只是纵深防御，
             // 见 `chatglm::checkin` 的模块头。
             let claim =
                 crate::server::core::providers::chatglm::checkin::claim_daily_login_score(store, &id)

@@ -259,6 +259,16 @@ pub(crate) const LOBSTERAI_PROVIDER_ID: &str = crate::server::core::providers::k
     crate::server::core::providers::ProviderKind::LobsterAi,
 );
 
+/// 智谱清言（`chatglm.cn`）provider id（**从注册表推导**，同
+/// [`LOOMY_PROVIDER_ID`] 的口径）。账号形态见 `chatglm_accounts.rs`。
+///
+/// 本家是唯一有**访客形态**的家（`guest/access` 免登录换证），所以公开形态
+/// 要多注入一个 `isGuest`（见 `store_view::public_account`），签到范围判定
+/// 也按它把访客排除（见 `billing::checkin::supports_checkin`）。
+pub(crate) const CHATGLM_PROVIDER_ID: &str = crate::server::core::providers::kind_id(
+    crate::server::core::providers::ProviderKind::Chatglm,
+);
+
 /// Cline **免费池** provider id（账号存储内部多处要用；**从注册表推导**，同
 /// [`RACCOON_PROVIDER_ID`] 的口径）。账号形态见 `cline_accounts.rs`。
 pub(crate) const CLINE_FREE_PROVIDER_ID: &str = crate::server::core::providers::kind_id(

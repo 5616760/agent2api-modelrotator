@@ -604,9 +604,6 @@
   .acct-table tbody td:empty { display: none; }
   /* 连接数收起后，余额那一格补到整行，不留半截空位 */
   .acct-table tr.acct-row:has(.cell-connections:empty) .cell-usage { grid-column: 1 / 4; }
-
-  /* 展开的限流明细行（.acct-panels，单 td 跨全部列）整行铺开，不套两列网格 */
-  .acct-table tr.acct-panels { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ═══ 请求日志：多列 grid -> 卡片 ═══
@@ -1502,6 +1499,16 @@
     padding-right: 10px;
     border-right: 1px solid var(--hairline);
   }
+  /* 限流格在卡片里改回竖排：它的内容现在是「整格可点的读数条 + 一行小字」，
+     而上面那条通用规则把它设成了横排（当年只有一枚小徽章时才成立）。横排时
+     读数条按 calc(100% + 16px) 的出血宽度参与 flex 计算，会把下面那行「最早 …
+     恢复」挤成零宽。竖排后两者各占一行，读数条仍然是整格宽、好点。 */
+  .acct-table tr.acct-row .cell-limits {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+  }
+  .acct-table tr.acct-row .cell-limits > .lim-sub { padding-right: 10px; }
   .acct-table tr.acct-row .cell-expiry { padding-left: 0; }
   /* 有效期格本身推到右缘，与卡片右边缘对齐 */
   .acct-table tr.acct-row .cell-expiry { justify-content: flex-end; }

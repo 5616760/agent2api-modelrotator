@@ -493,6 +493,21 @@ impl AccountStore {
                     "displayName".to_string(),
                     Value::String(display_name_of(&fields, &record.id().to_string())),
                 );
+                // 智谱清言的**访客标记**：签到范围判定
+                // （`billing::checkin::supports_checkin`）与签到中心的「范围外」
+                // 原因都读它，两处必须看到同一份事实 —— 而访客形态只存在记录
+                // 里（公开形态是逐个字段组装的，不会自动带上 `isGuest`）。
+                //
+                // 只对本家注入：别的家没有访客形态，给所有账号加一个恒 false 的
+                // 键只会让读侧多一个「要不要判它」的疑问。判据见
+                // `chatglm_accounts::guest_of_record`（只认确凿的访客证据，
+                // 与新手任务列表那边的兜底方向刻意相反）。
+                if record.provider() == super::CHATGLM_PROVIDER_ID {
+                    fields.insert(
+                        "isGuest".to_string(),
+                        Value::Bool(super::chatglm_accounts::guest_of_record(record)),
+                    );
+                }
                 Value::Object(fields)
             }
             // 各家形状恒为对象；真出现异常形态时原样透出，不在这里改语义

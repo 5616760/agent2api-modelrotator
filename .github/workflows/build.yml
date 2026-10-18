@@ -9,16 +9,23 @@ name: build
 # 本仓库是公开仓库，标准 GitHub-hosted runner（含 macOS）对公开仓库免费且
 # 不计分钟数 —— macOS runner 是私有仓库里最贵的一档，公开仓库没有这个问题。
 #
-# ── 五个 job 的分工（名字相近，别看混）────────────────────────
+# ── 六个 job 的分工（名字相近，别看混）────────────────────────
 #   macos           → macOS 桌面端 dmg           → artifact: macos-universal
 #   windows         → Windows 桌面端 NSIS exe    → artifact: windows-nsis
 #   linux-desktop   → Linux 桌面端 deb+AppImage  → artifact: linux-desktop
 #   linux-server    → Linux **服务端**包（无 GUI）→ artifact: linux-server-{amd64,arm64}
 #   windows-server  → Windows **服务端**包（无 GUI）→ artifact: windows-server-amd64
+#   android         → Android APK（Capacitor）   → artifact: android-apk
 #
-# 前三者是「桌面端安装包」（给用户装在自己机器上），后两者是**服务器形态**：
+# 前三者是「桌面端安装包」（给用户装在自己机器上），中间两者是**服务器形态**：
 # 无图形界面、命令行安装、注册成系统服务（Linux systemd / Windows SCM）。
 # linux-server 的产物同时还是容器内一键更新的载荷。
+#
+# android 是**手机端**：Capacitor 把 `desktop-tauri/mobile` 的界面打进 APK，
+# 与 PWA 形态共用同一份 UI 代码。它的 Web 形态（`ui/m/**`）不需要在这里构建
+# —— 那份产物**入库**，由 frontend-artifacts.yml 校验可复现，桌面端 / 服务端 /
+# Docker 的 `ui/` 静态目录直接带上它，发版流程一行都不用改。这里只补「需要
+# 签名密钥、只能在打包机上出」的 APK 那一半。
 #
 # ── 触发方式 ──────────────────────────────────────────────────
 #   · 手动 workflow_dispatch（在 Actions 页面选分支触发）：
@@ -52,12 +59,23 @@ name: build
 # （甚至因为找不到 lock 文件而直接报错）。
 #
 # ── 签名 ──────────────────────────────────────────────────────
-# 默认**不签名**（ad-hoc）。macOS 上未签名的应用 Gatekeeper 会拦下，
+# 桌面端默认**不签名**（ad-hoc）。macOS 上未签名的应用 Gatekeeper 会拦下，
 # 用户需要在「系统设置 → 隐私与安全性」里手动放行一次。要消除这一步需要
 # Apple Developer 账号（$99/年）做 Developer ID 签名 + 公证，届时在仓库里配
 # APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_SIGNING_IDENTITY /
 # APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID 这几个 secret 即可，
 # tauri-action 与 tauri CLI 会自动完成签名与公证。
+#
+# APK 则**必须签名**（Android 不接受未签名的 release 包），密钥与密码不入库
+# （见 .gitignore），由下面 android job 从四个 secret 还原：
+#   ANDROID_KEYSTORE_BASE64   agent2api-release.jks 的 base64（单行）
+#   ANDROID_KEYSTORE_PASSWORD keystore.properties 的 storePassword
+#   ANDROID_KEY_ALIAS         keyAlias（当前是 agent2api）
+#   ANDROID_KEY_PASSWORD      keyPassword
+# ⚠️ 这四样换不得：换了密钥签名就不一致，已装的用户无法覆盖升级。原密钥
+# 除了打包机之外要另存一份，secret 只是它的第二份副本。
+# 生成 base64：base64 -w0 agent2api-release.jks（Windows 用
+# [Convert]::ToBase64String([IO.File]::ReadAllBytes('agent2api-release.jks'))）
 
 on:
   workflow_dispatch:
@@ -364,5 +382,150 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: windows-server-amd64
+          path: dist/*
+          if-no-files-found: error
+
+  # ── Android APK（Capacitor）──────────────────────────────────
+  # 手机端的**安装包**形态。Web 形态（PWA）不在这里构建：`ui/m/**` 入库、
+  # 由 frontend-artifacts.yml 校验可复现，桌面端 / 服务端 / Docker 的 `ui/`
+  # 静态目录直接带上它，一行都不用改。这里补的是「必须签名、只能在打包机
+  # 上出」的那一半。
+  #
+  # ── 为什么用 ubuntu-latest 而不是 macOS / Windows ────────────
+  # Android 构建与宿主平台无关（AGP 出的是同一个 APK），而 GitHub 的
+  # ubuntu runner 自带 Android SDK（ANDROID_HOME 已设，含 compileSdk 36
+  # 与 build-tools 36.0.0 —— 与 android/variables.gradle 对得上），
+  # 不需要额外下载 SDK。macOS runner 对公开仓库虽然免费，但启动与排队
+  # 都更慢，没必要。
+  #
+  # ── 为什么必须先装 ui-kit ────────────────────────────────────
+  # 手机端以**源码**方式接入组件库（vite alias 指到 ../ui-kit/src），而
+  # ui-kit/styles/globals.css 里的 `@import "tailwindcss"` / `tw-animate-css`
+  # / `shadcn` 要从**它自己**的 node_modules 解析。只装 mobile 不装 ui-kit
+  # 时样式解析不到，构建出的 mobile.css 会缺一大块 —— 与
+  # frontend-artifacts.yml 里同一条注意事项。
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装 Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          # 两个 lock 文件都要列：mobile 的构建依赖 ui-kit 的源码与样式
+          cache-dependency-path: |
+            desktop-tauri/ui-kit/package-lock.json
+            desktop-tauri/mobile/package-lock.json
+
+      # Capacitor 8 生成的 capacitor.build.gradle 要求 Java 21
+      # （sourceCompatibility / targetCompatibility = VERSION_21）。
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # 缓存 Gradle 分发包与依赖（~/.gradle）。首次构建要下 wrapper 与
+      # 一整棵 AGP / androidx 依赖树，命中后只剩编译。
+      - name: 设置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: 安装依赖
+        run: |
+          npm --prefix desktop-tauri/ui-kit ci
+          npm --prefix desktop-tauri/mobile ci
+
+      # ── 签名密钥：从 secret 还原 ─────────────────────────────
+      # 密钥与密码不入库（见 .gitignore），这里用四个 secret 现场拼出
+      # android/agent2api-release.jks 与 keystore.properties。
+      #
+      # 缺 secret 时**明确失败**，不产未签名包：Android 不接受未签名的
+      # release APK，而「静默跳过」的结果是 Release 少一个安装包、用户
+      # 装不上 —— 让流水线红在配置缺失上，比让发版悄悄缺件好排查。
+      #
+      # ⚠️ keystore.properties 的 storeFile 是 `../agent2api-release.jks`，
+      # 相对于 android/app/ 解析 → 密钥要放在 android/ 目录下。
+      - name: 还原 APK 签名密钥
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$ANDROID_KEYSTORE_BASE64" ]   || missing="$missing ANDROID_KEYSTORE_BASE64"
+          [ -n "$ANDROID_KEYSTORE_PASSWORD" ] || missing="$missing ANDROID_KEYSTORE_PASSWORD"
+          [ -n "$ANDROID_KEY_ALIAS" ]         || missing="$missing ANDROID_KEY_ALIAS"
+          [ -n "$ANDROID_KEY_PASSWORD" ]      || missing="$missing ANDROID_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::缺少 secret:$missing"
+            echo "APK 必须签名才能安装，流水线不产未签名包。到仓库"
+            echo "Settings → Secrets and variables → Actions 补齐这四个 secret，"
+            echo "生成方式见 .github/workflows/build.yml 顶部「签名」一节。"
+            exit 1
+          fi
+
+          cd desktop-tauri/mobile/android
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > agent2api-release.jks
+          # 用 printf 而不是 heredoc：YAML 块标量会给每行加缩进，
+          # heredoc 的结束符必须顶格，缩进后会一直读到文件尾
+          printf 'storeFile=../agent2api-release.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" \
+            > keystore.properties
+          ls -l agent2api-release.jks
+
+      - name: 构建 APK
+        run: |
+          cd desktop-tauri/mobile/android
+
+          # gradle.properties 里的 org.gradle.java.home 是本机 Windows 路径
+          # （C:/Program Files/Eclipse Adoptium/jdk-21…），Linux runner 上
+          # 不存在，Gradle 会直接报「无效的源发行版」或找不到 JVM。删掉这行，
+          # 让它回落到 setup-java 设好的 JAVA_HOME。
+          sed -i '/^org\.gradle\.java\.home=/d' gradle.properties
+
+          # wrapper 默认走腾讯云镜像（本机在国内用它加速）；runner 在海外，
+          # 该镜像慢且不稳。CI 改官方源，并用 -bin 而不是 -all
+          # （-all 含源码与文档，约 200 MB，构建用不到）。
+          sed -i 's|^distributionUrl=.*|distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-bin.zip|' \
+            gradle/wrapper/gradle-wrapper.properties
+          grep '^distributionUrl=' gradle/wrapper/gradle-wrapper.properties
+
+          # 入库的 gradlew 是 100644（Windows 上生成，没有执行位），
+          # Linux 上要补一下才能 ./gradlew
+          chmod +x gradlew
+
+          # 先出 Web 产物再同步进原生工程：
+          #   tsc --noEmit → vite build --mode apk（产物落 android-www/）
+          #   → cap sync android（拷进 app/src/main/assets/public）
+          cd ../..
+          npm run build:apk
+          cd android
+          ./gradlew assembleRelease --no-daemon
+
+      - name: 打包并生成校验和
+        run: |
+          # 版本号取 mobile/package.json（与 gradle 的 versionName 同源），
+          # 产物名与历史 Release 资产保持一致：Agent2API-<版本>.apk
+          # 用 node 读而不是 jq：node 是这套流程本来就有的依赖，
+          # ubuntu runner 虽然带 jq，但少一个工具就少一处环境假设
+          version="$(node -p "require('./desktop-tauri/mobile/package.json').version")"
+          src="desktop-tauri/mobile/android/app/build/outputs/apk/release/app-release.apk"
+          [ -f "$src" ] || { echo "::error::没有产出 $src"; exit 1; }
+
+          mkdir -p dist
+          cp "$src" "dist/Agent2API-$version.apk"
+          # 与 linux-server / windows-server 包同格式（sha256 + 两个空格 + 文件名）
+          ( cd dist && sha256sum "Agent2API-$version.apk" > "Agent2API-$version.apk.sha256" )
+
+          ls -lh dist
+          cat "dist/Agent2API-$version.apk.sha256"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-apk
           path: dist/*
           if-no-files-found: error

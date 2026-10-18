@@ -46,15 +46,16 @@ import {
   displayNameOf, expiryMillis, formatIntervalSeconds, formatResetText,
   formatTokenCount, identifierOf, isDesktopAccount, isEnabled, isFreePlan, planBadgeLabel,
   providerFeatures,
-  providerOf, RESET_UNKNOWN, supportsClaim, supportsCreditDetail, supportsUsage, supportsUsageDetail,
+  providerOf, supportsClaim, supportsCreditDetail, supportsUsage, supportsUsageDetail,
   tokenBlockedOf, tokenCountdownText, tokenDisableTriggeredOf, tokenReadingForRule,
   tokenRulesOf, tokenWindowInfo, zcodePlanStateLabel,
 } from './accounts-domain'
 import { CreditDetailButton, creditRowsOf } from './accounts-credit-detail'
+import { LimitDetailButton, limitRowsOf } from './accounts-limit-detail'
 import {
   PROXY_CUSTOM_CURRENT, PROXY_CUSTOM_EDIT, applyProxyPick,
   connectionsOf, maskName, openBatchDialog, openSettingsDialog, openZcodePlans,
-  poolError, proxyPoolSnapshot, queryUsageOnce, setAccountEnabled, setGroupEnabled, setPanelOpen,
+  poolError, proxyPoolSnapshot, queryUsageOnce, setAccountEnabled, setGroupEnabled,
   tokenUsageOf, toggleGroupCollapsed, toggleNamesHidden, usageEntryOf, usageFailureOf,
 } from './accounts-data'
 import type { AccountGroup } from './accounts-domain'
@@ -386,13 +387,20 @@ export function StatusCell({ account }: { account: AccountRecord }) {
 /**
  * 限流：这个账号**当前限流中的模型**。限额在后端按「账号 × 模型」记，四家通用 ——
  * 所以这一列对四家都成立，不再需要「选个模型看队列」的筛选器。
- * 有限流时是一枚可点的黄色徽章（点开 / 收起行下的明细面板），正常时是绿点「正常」。
+ * 有限流时是一枚可点的读数条（点开行下的明细弹层，见 accounts-limit-detail），
+ * 正常时是绿点「正常」。
  *
  * 「已限流」分段把限制器的跳过档也算进来（isLimitedNow 的口径），这一列必须同口径：
  * 没有模型限额但被限制器拦下的账号不亮绿点，给一枚黄色「余额不足 / Token 限额」
  * 说明它为何归入已限流（跳过的细节仍由余额列的徽章承载，这里不复述）。
+ *
+ * 三家形态的判据都是「有没有生效中的限额记录」，不为任何一家开特例 ——
+ * 记录怎么来（429 / 限额码 / 上游的 Retry-After）是转发层的事，界面只认这一份。
  */
-export function LimitsCell({ account, open }: { account: AccountRecord; open: boolean }) {
+export function LimitsCell({ account, onClear }: {
+  account: AccountRecord
+  onClear: (model: string) => void
+}) {
   const entries = activeLimits(account)
   if (!entries.length) {
     if (balanceBlockedOf(account, usageEntryOf(account))) {
@@ -417,19 +425,14 @@ export function LimitsCell({ account, open }: { account: AccountRecord; open: bo
       </Badge>
     )
   }
-  const soonest = formatResetText(entries[0].resetAt)
   return (
-    <>
-      <Badge variant='warning' shape='tag' render={<button type='button' />}
-        className={open ? 'ring-2 ring-warning-soft' : undefined}
-        title={t('点击{action}各模型的限流明细', { action: open ? t('收起') : t('查看') })}
-        onClick={() => setPanelOpen(account.id, 'limits', !open)}>
-        {t('{n} 个模型 ▾', { n: entries.length })}
-      </Badge>
-      <span className='lim-sub' title={t('最早恢复')}>
-        {t('最早 {soonest} 恢复', { soonest: soonest === RESET_UNKNOWN ? t('待定') : soonest })}
-      </span>
-    </>
+    <LimitDetailButton
+      accountName={displayNameOf(account)}
+      rows={limitRowsOf(account)}
+      count={entries.length}
+      soonest={formatResetText(entries[0].resetAt)}
+      onClear={onClear}
+    />
   )
 }
 
@@ -1597,8 +1600,16 @@ export function ProxyCell({ account }: { account: AccountRecord }) {
   for (const item of poolItems) {
     // 文案是「名字（协议 主机:端口）」—— 名字是用户在「网络代理」页起的，
     // 地址是后端解析出来的实时值（见 poolItemLabel）。同一格里多条目同名时
-    // 地址是唯一能分辨它们的读数，不能只写名字
-    items.push({ value: `${POOL_VALUE_PREFIX}${item.id}`, label: poolItemLabel(item) })
+    // 地址是唯一能分辨它们的读数，不能只写名字。
+    //
+    // 禁用项**置灰不可选**：选它只会「保存成功 → 解析失败 → 回退直连」，
+    // 用户看到的是「代理已禁用」这种事后解释。要改就去「网络代理」页启用它。
+    // （当前值恰好是禁用项时照常显示 —— 触发器读的是这一项的 label，含「已禁用」）
+    items.push({
+      value: `${POOL_VALUE_PREFIX}${item.id}`,
+      label: poolItemLabel(item),
+      disabled: item.enabled === false,
+    })
   }
   if (pool === null) {
     // 还没读到（首帧 / 自愈 effect 尚未跑完）：给一句「读取中」而不是
@@ -1758,89 +1769,6 @@ export function MoreMenu({ account, atFront }: { account: AccountRecord; atFront
         </div>
       </PopoverContent>
     </Popover>
-  )
-}
-
-/* ─── 展开的明细行（限流）──────────────────── */
-
-/**
- * 限流明细面板：这个账号**当前限流中的模型**逐行列出 —— 模型名、恢复时间、上游给的
- * 原因，以及「清除标记」动作（单条）与「全部清除」。
- *
- * 为什么值得一整块面板：限流是按模型的（一个账号完全可能 A 模型限流、B 模型正常），
- * 把模型名列出来才能回答「到底是谁把我限了」；而「清除标记」是真实动作，悬浮层里
- * 放不下也点不稳。「清除标记」只作用于本机这份冷却标记（下一次请求若上游仍限流会
- * 再次被标记），所以它是安全且可逆的，不需要二次确认。
- */
-function LimitPanel({ account, onClose, onClear }: {
-  account: AccountRecord
-  onClose: () => void
-  onClear: (model: string) => void
-}) {
-  const entries = activeLimits(account)
-  const close = (
-    <Button variant='ghost' size='icon-xs' className='panel-close' title={t('收起')} onClick={onClose}>✕</Button>
-  )
-  // 记录为空的面板画不出来（PanelsRow 那一层已经把行收掉了）：调用方保证
-  // 传进来的账号此刻至少有一条生效中的限流记录。
-  return (
-    <div className='row-panel limit-panel'>
-      {close}
-      <div className='lp-head'>
-        <b>{displayNameOf(account)}</b>
-        <span className='muted'>{t('{n} 个模型限流中 · 记录来自上游 429 / 限额码，到恢复时间自动解除', { n: entries.length })}</span>
-        <Button variant='outline' size='xs' title={t('清掉该账号全部模型的限流标记')}
-          onClick={() => onClear('')}>{t('全部清除')}</Button>
-      </div>
-      {entries.map(entry => {
-        const reset = formatResetText(entry.resetAt)
-        const reason = entry.message || (entry.status ? t('上游返回 {status}', { status: entry.status }) : '')
-        return (
-          <div className='lp-row' key={entry.model}>
-            <span className='lp-model' title={entry.model}>{entry.model}</span>
-            <Badge variant='warning' shape='tag'>{t('限流中')}</Badge>
-            <span className='lp-reset' title={t('到恢复时间后自动解除，无需手动操作')}>
-              {reset === RESET_UNKNOWN ? t('恢复时间未知') : t('{time} 恢复', { time: reset })}
-            </span>
-            <span className='lp-reason' title={reason}>{reason}</span>
-            <Button variant='outline' size='2xs'
-              title={t('清掉本机的限流标记，立刻重新尝试该模型（上游若仍在限流会再次被标记）')}
-              onClick={() => onClear(entry.model)}>{t('清除标记')}</Button>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-/**
- * 行下的明细面板承载行。展开态是 store 里那份 Map（页面读出来传进来），这里只负责画。
- *
- * **记录清空即收起**：面板开着的时候，「清除标记 / 全部清除」清掉最后一条、或那条冷却
- * 恰好到期，都会让这个账号一条生效中的记录都不剩。此时限流列的徽章已经变回绿色
- * 「正常」、不再是切换入口 —— 面板再留着，就只能是一块什么都没有、只剩关闭按钮的
- * 空条。所以这里在记录为空时直接不画，并把 store 里的展开态同步收回来（不收的话，
- * 这个账号下次再被限流会自动弹开，绕过了用户的点击）。
- */
-export function PanelsRow({ account, colSpan, limitsOpen, onClear }: {
-  account: AccountRecord
-  colSpan: number
-  /** 展开态由页面从 store 读出来传进来（这一层只负责画） */
-  limitsOpen: boolean
-  onClear: (id: string, model: string) => void
-}) {
-  const empty = activeLimits(account).length === 0
-  React.useEffect(() => {
-    if (limitsOpen && empty) setPanelOpen(account.id, 'limits', false)
-  }, [limitsOpen, empty, account.id])
-  if (!limitsOpen || empty) return null
-  return (
-    <tr className='acct-panels' data-panels-for={account.id}>
-      <td colSpan={colSpan}>
-        <LimitPanel account={account} onClose={() => setPanelOpen(account.id, 'limits', false)}
-          onClear={model => onClear(account.id, model)} />
-      </td>
-    </tr>
   )
 }
 

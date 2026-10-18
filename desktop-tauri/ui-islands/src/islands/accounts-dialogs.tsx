@@ -395,7 +395,10 @@ export function ProxyForm({
               </SelectTrigger>
               <SelectContent>
                 {(pool ?? []).map(item => (
-                  <SelectItem key={item.id} value={item.id}>
+                  // 已禁用的条目置灰不可选：选它保存后解析必然失败（转发回退直连），
+                  // 用户只会看到「代理已禁用」。要启用请去「网络代理」页。
+                  // 当前值恰好是禁用项时仍正常显示（触发器读的是同一份 label）
+                  <SelectItem key={item.id} value={item.id} disabled={item.enabled === false}>
                     {poolItemLabel(item)}
                   </SelectItem>
                 ))}
@@ -440,7 +443,13 @@ export function ProxyForm({
               <MultiSelect id={`${idPrefix}-rotate-exits`}
                 value={draft.rotateIds}
                 onValueChange={values => set({ rotateIds: values.map(String) })}
-                options={(pool ?? []).map(item => ({ value: item.id, label: poolItemLabel(item) }))}
+                // 禁用项置灰：后端轮询取用时会跳过它们（`candidate_ids` 只留启用项），
+                // 列出来能选等于让用户白挑一条永不生效的出口
+                options={(pool ?? []).map(item => ({
+                  value: item.id,
+                  label: poolItemLabel(item),
+                  disabled: item.enabled === false,
+                }))}
                 placeholder={t('选择要轮询的代理（可多选）')}
                 aria-label={t('轮询的代理')} />
               <Button variant='outline' size='sm' onClick={() => loadPool(true)}>{t('重新读取')}</Button>

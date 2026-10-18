@@ -20,6 +20,7 @@
  */
 
 import { t } from '../i18n'
+import { acceptProxyPool } from './proxy-pool-cache'
 
 /* ─── 后端形态 ───────────────────────────────── */
 
@@ -410,12 +411,18 @@ export function clearSelection(): void {
  * 写操作返回的整份列表就地替换（与模型管理页同一约定）。
  * 勾选状态跟着收敛：条目已不在列表里的（被删 / Clash 侧删了出口）从 selected
  * 里剔除 —— 留着会让「已选 N 个」里混进幽灵，批量删除时还会拿它去请求。
+ *
+ * 同一份列表**同时写进共享缓存**（`proxy-pool-cache.ts`）：账号页的代理下拉
+ * 读的就是它。这一页的每个读 / 写路径都经过这里（加载、启停、删除、批量、
+ * 订阅增删改后的 `refreshPool`、同步 Clash），所以「在这里写一次」就覆盖了
+ * 全部会让池变化的操作 —— 账号页因此不必等切页，禁用 / 删除立刻反映到下拉。
  */
 export function accept(payload: ProxyPoolPayload | null | undefined): void {
   if (!payload || typeof payload !== 'object' || !Array.isArray(payload.items)) return
   const alive = new Set(payload.items.map(item => item.id))
   const selected = new Set([...state.selected].filter(id => alive.has(id)))
   patch({ data: payload, error: '', selected })
+  acceptProxyPool(payload.items)
 }
 
 /* ─── 取数与单条动作 ─────────────────────────── */

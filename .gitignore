@@ -13,6 +13,7 @@ desktop-tauri/src-tauri/gen/schemas/
 .zcode/
 .verify/
 prototype/
+.codeartsdoer/
 # ZCode 的忽略配置文件本身（本机工具配置，不入库）
 .zcodeignore
 
@@ -23,6 +24,10 @@ desktop-tauri/web
 # 运行日志与截图产物
 logs/
 desktop-tauri/window-shot.png
+
+# curl 调试残留（-D 响应头 / -c cookie jar），含会话令牌，不入库
+desktop-tauri/src-tauri/h1.txt
+desktop-tauri/src-tauri/c1.txt
 
 # 发布说明草稿只在本机留存，不入库；docs/ 下的其它文档正常入库
 /docs/release-notes/
