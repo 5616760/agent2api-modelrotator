@@ -26,7 +26,7 @@ import { t } from '../i18n'
  *
  * ── 为什么独立成文件、自带数据流 ────────────────────────────
  * settings-page.tsx 已经 2300 多行，而这一块与设置页的其它面板**没有状态交集**
- * （它自己读写 `/api/cloud-sync`）。与 `assistant-settings-pane.tsx` 同一先例：
+ * （它自己读写 `/api/cloud-sync`）。与 `settings-prompt-editor.tsx` 同一先例：
  * 面板独立成文件、自己在挂载时取数，宿主只负责放一个 `<CloudSyncPanel />`。
  *
  * ── 表单为什么不复用 settings-state 的快照 ──────────────────

@@ -398,20 +398,31 @@
 .queue-grip:hover { background: color-mix(in srgb, var(--text) 10%, transparent); color: var(--text-2); }
 
 .acct-row.dragging,
-.grp-band.dragging { opacity: .45; }
+.grp-band.dragging,
+.acct-group.dragging { opacity: .45; }
 
 /* 拖动中：整页光标切成抓取态，提示「现在松手就会落位」 */
 body.queue-dragging,
 body.queue-dragging * { cursor: grabbing !important; }
 
 /* 落点提示：插在这一行的**上面 / 下面**。用 inset box-shadow 而不是 border ——
-   加 border 会把这一行撑高 2px，拖动中整张表跟着跳，落点反而看不清。 */
+   加 border 会把这一行撑高 2px，拖动中整张表跟着跳，落点反而看不清。
+
+   ── 为什么组要选两层（2026-10 修）──────────────────────────
+   `bindQueueDrag` 把 `drop-before` / `drop-after` 加在**同级项**上：行是 `<tr>`，
+   组是 `<tbody class="acct-group">`（见 accounts-queue-drag 的 siblingsOf）。
+   而原先这里只写了 `.grp-band.drop-before > td` —— 类挂在 tbody 上，这条选择器
+   永远匹配不到，于是**组内拖动有落点线、整组拖动却一条线都没有**。
+   组的落点还要选对行：插入点在整段之上 → 画在组头（tbody 的第一行）；
+   在整段之下 → 画在**最后一行**（展开时是最后一条账号，折叠时就是组头自己），
+   画在组头上会跑到这一家中间去。 */
 .acct-row.drop-before > td,
 .acct-row.drop-after > td,
-.grp-band.drop-before > td,
-.grp-band.drop-after > td { box-shadow: inset 0 2px 0 0 var(--primary); }
+.acct-group.drop-before > .grp-band > td,
+.grp-band.drop-before > td { box-shadow: inset 0 2px 0 0 var(--primary); }
 
 .acct-row.drop-after > td,
+.acct-group.drop-after > tr:last-child > td,
 .grp-band.drop-after > td { box-shadow: inset 0 -2px 0 0 var(--primary); }
 
 /* 组内序号：#N。与分组带的「第 N 顺位」是同一种读数的两个层级，
@@ -427,11 +438,18 @@ body.queue-dragging * { cursor: grabbing !important; }
 
 /* ─── 分组带（一家一段的横幅，占满一行的通栏格）───
    刻意保持**中性**：一家一色会让整页看着像调色板，而「这一段是哪一家」由家名
-   与图标已经说清楚了。分组带只负责两件事：说清这是谁、以及可拖（顺位）。 */
+   与图标已经说清楚了。分组带只负责两件事：说清这是谁、以及可拖（顺位）。
+
+   ── 整条可点折叠（2026-10）────────────────────────────────
+   带宽里的家名、统计、合计、空白处都能点：收起一家是高频动作，要求用户瞄准
+   右侧那颗小箭头是没必要的。按钮与拖动把手各自保留原动作（见 GroupBandRow 的
+   onClick 排除名单）。箭头在悬停整条时提亮 —— 它是键盘 / 读屏的真正入口，
+   鼠标用户则由整条承载。 */
 .acct-group .grp-band > td {
   padding: 0;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
 }
 
 .grp-band-inner {
@@ -441,6 +459,11 @@ body.queue-dragging * { cursor: grabbing !important; }
   min-height: 32px;
   padding: 0 8px;
 }
+
+/* 控件与把手在自己的地盘上换回各自的光标：一眼就能分出「这几处是控件」 */
+.grp-band .grp-iconbtn { cursor: pointer; }
+.grp-band .queue-grip { cursor: grab; }
+.grp-band:hover .grp-iconbtn.grp-fold { background: var(--nav-hover); color: var(--text); }
 
 /* 组顺位：与 .order-rank 同色同一档字号 —— 组的先后与组内先后是同一类读数。
    title 里说清「拖动可改」，格子本身不放控件。 */
@@ -541,6 +564,37 @@ body.queue-dragging * { cursor: grabbing !important; }
 .acct-group.collapsed .grp-fold svg { transform: rotate(-90deg); }
 
 /* 折叠时分组带的下边框仍然留着：它同时是与下一段的分隔线 */
+
+/* ─── 当前排序规则的标记（分组带右侧那枚小胶囊）───
+   只在**有规则生效**时出现。用品牌柔色而不是中性灰：它是一条正在生效的规则，
+   不是脚注；点它等同点齿轮（两个入口同一件事，不必让用户去猜哪个能改）。
+   宽度不设上限但走省略号：规则摘要最长会到「到期 近→远 · 添加 新→旧」，
+   窄窗口下宁可截断也不要把它挤成两行撑高分组带。 */
+.grp-sort-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 18px;
+  padding: 0 7px;
+  margin-left: 2px;
+  border: 1px solid var(--primary-bd);
+  border-radius: var(--r-pill);
+  background: var(--primary-soft);
+  box-shadow: none;
+  color: var(--primary-fg);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-synthesis: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.grp-sort-mark:hover { border-color: var(--primary); }
+.grp-sort-mark span { display: inline-flex; flex: 0 0 auto; }
+.grp-sort-mark svg { display: block; }
 
 /* ─── 连接数列 ───
    只在有连接时显示一个绿色数字（与 OmniProxy 上游管理页的「连接」列同款观感），

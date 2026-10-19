@@ -331,6 +331,32 @@ const PROVIDER_FEATURES: Record<string, ProviderFeatures> = {
   // `expiry: 'expiresAt'` —— 落盘写的是毫秒 `expiresAt`（显式 > createdAt +
   //   expiresIn > JWT 的 `exp`），与 atomcode 同一条教训。
   lobsterai: { usage: true, creditDetail: true, edition: false, identifier: 'userId', expiry: 'expiresAt' },
+  // MonkeyCode（长亭科技）的两个站点。此前**漏登记**（后端 `PROVIDERS` 有、本表没有），
+  // 于是它掉进 GENERIC_FEATURES：余额列一律显示「—」（`supportsUsage` 走兜底 false），
+  // 标识列按 `userId` 读成空，有效期列去读一个不存在的 `tokenExpiresAt`。
+  // `usage: false` —— 本家**确实没有余额查询**：适配器 `supports_usage` 保持默认 false
+  //   （见 `providers/monkeycode/adapter.rs` 的模块头），这是「上游没有这个接口」，
+  //   不是「还没接」。所以这里如实关掉，与后端同一口径。
+  // `identifier: 'userId'` —— 公开形态里有 `userId`（见
+  //   `account_store::monkeycode_accounts::to_monkeycode_public_account`）。
+  // `expiry: 'expiresAt'` —— 公开形态给的是 `expiresAt`（session cookie 的 30 天硬限制，
+  //   见 `monkeycode/credentials.rs`），**不是** `tokenExpiresAt`。
+  // `edition: false` —— 地区已经由 provider id 表达（两家、两个分组），再拼一次后缀
+  //   会得到「MonkeyCode 国际版 国际版」。两个站点都要登记，漏一个就掉回兜底。
+  monkeycode: { usage: false, edition: false, identifier: 'userId', expiry: 'expiresAt' },
+  'monkeycode-intl': { usage: false, edition: false, identifier: 'userId', expiry: 'expiresAt' },
+  // OrcaTerm（腾讯云遨驰终端）。此前同样**漏登记** —— 后端 `supports_usage` 与
+  // `query_usage` 都实现了（`DescribeUserBillingStatus` 的月度 AI 配额，见
+  // `providers/orcaterm/balance.rs`），README 的支持矩阵也打了 ✓，但前端查表
+  // 查不到它：余额按钮、余额列、批量查询三处一起静默失效。
+  // `usage: true` —— 有余额概念（`available` + `unit: "次"` 的归一形状）。
+  // `identifier: 'uid'` —— 公开形态给的是 `uid`（`orcaterm_accounts` 的公开形态）。
+  // `expiry: 'tokenExpireAt'` —— ⚠ 与别家都不同的字段名（不是 `tokenExpiresAt`）：
+  //   公开形态里就叫 `tokenExpireAt`，写错只会让有效期列一直显示「—」。
+  // `edition: false` —— 单一入口（桌面端登录态 / 粘贴令牌），没有地区概念。
+  // 没有登记 `creditDetail`：`query_usage` 只给 `available` 与 subscription，
+  // 不出逐份 `credits[]`，挂入口会点开一个空框。
+  orcaterm: { usage: true, edition: false, identifier: 'uid', expiry: 'tokenExpireAt' },
 }
 
 /**
@@ -990,6 +1016,97 @@ export function supportsCreditDetail(account: AccountRecord | null | undefined):
 }
 
 /**
+ * **账号最早一份「还能用」的积分包到期时刻**（毫秒）；读不到就是 `null`。
+ *
+ * 「还能用」= 未过期 + 剩余不为 0：已经作废的包不参与「快到期优先」，
+ * 否则一个上个月就过期的账号会永远霸占组首。
+ *
+ * ── 数据从哪来 ────────────────────────────────────────────────
+ * 余额读数（`UsageEntry`）里的 `credits[]`：后端逐份给出面额 / 已用 / 剩余 /
+ * 领取 / 到期（见 `billing::usage` 的 `credit_packs_from`）。只有登记了
+ * `creditDetail` 能力的家才会产出这个数组，其余家自然读到 `null`。
+ *
+ * ── 三种要跳过的包（与 creditRowsOf 的展示判据同源）────────────
+ *   · `daily: true` —— 每日回满而不是到期作废，它的 expireAt 是周期边界
+ *     （今天 24 点）；拿它参与排序会让日额度账号天天霸占组首。
+ *   · `record: true` —— 流水一笔（收支记录），不是一份还有余额的包。
+ *   · `unlimited: true` —— 没有「花完」的概念。
+ * 这三种在 `creditRowsOf` 里也有对应判据（那边决定「要不要折进已用完」），
+ * 两处问的是同一件事：这份包现在还值不值得关心。
+ */
+export function creditExpiryOf(entry: UsageEntry, now = Date.now()): number | null {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null
+  const data = entry as Record<string, unknown>
+  const packs = Array.isArray(data.credits) ? data.credits as Array<Record<string, unknown>> : []
+  let best: number | null = null
+  for (const pack of packs) {
+    if (!pack || typeof pack !== 'object') continue
+    if (pack.record === true || pack.daily === true || pack.unlimited === true) continue
+    const expire = Number(pack.expireAt)
+    if (!Number.isFinite(expire) || expire <= 0 || expire <= now) continue
+    const remain = pack.remain
+    // 剩余读到 0 就是花完了；读不到（缺键）时不猜 —— 与 creditRowsOf 的 exhausted
+    // 判据同一取向：两侧都读不到就不下结论，宁可让它参与排序
+    if (remain !== null && remain !== undefined && remain !== '' && Number(remain) <= 0) continue
+    if (best === null || expire < best) best = expire
+  }
+  return best
+}
+
+/**
+ * 能按「积分到期时间」排序的提供商。
+ *
+ * ── 为什么不能直接用 `creditDetail` ───────────────────────────
+ * `creditDetail` 只说「这一家有逐份积分明细」，**不保证明细里带到期时间**。
+ * 逐家核对后端产出（`credits[].expireAt`）之后，真实分布是这样的：
+ *
+ *   ✅ 产出 `expireAt`（本名单）：
+ *     · workbuddy / workbuddy-intl —— `billing::usage` 的 `credit_packs_from`
+ *       逐份给出 `DeductEndTime`（见 workbuddy/adapter.rs）
+ *     · trae —— `trae/usage.rs` 把权益包的 `expire_time`（缺则 `end_time`）写成
+ *       毫秒 `expireAt`，并按到期升序排好
+ *     · officeace —— `officeace/subscription.rs` 的套餐配额 / 奖励活动行都带
+ *       `expireAt`（毫秒，`expire_ms > 0` 才写）
+ *
+ *   ❌ 有明细、但**明细里没有到期时间**（不进名单）：
+ *     · raccoon —— 明细只有 `name` + `remain`（上游只给余额一个数）
+ *     · zcode —— `credits_of` 只写 total/used/remain，纯比例窗口整行跳过
+ *     · qoder —— 代码注释明确写着「不写 `expireAt` / `grantAt`：桶级没有这些字段」
+ *     · loomy —— 永久积分 / 每日赠送两行，都没有到期
+ *     · modelscope —— 魔粒余额两行，没有到期
+ *     · lobsterai —— 测试明确断言「未核实格式的字段一律不写」
+ *     · chatglm —— 只有**流水记录**（`record: true`）带 `expireAt`，
+ *       而流水不是「一份还有余额的包」，排序时被 creditExpiryOf 跳过
+ *     · autoclaw —— `credits[]` 里没有 `expireAt`；它的 `expireAt` 在
+ *       `subscription` 上（订阅到期，不是积分包到期），而「即将过期」那行只有
+ *       相对文案（“7 天”），拿它推时刻等于替上游编一个时间
+ *
+ * 这份名单是**契约**：后端哪天给某一家补上了逐份到期，这里要同步加一行，
+ * 否则那一家的设置项会一直显示「不可用」。
+ *
+ * 运行时还有第二道闸（方案 B，见 GroupSettingsDialog 的「暂无数据」）：
+ * 名单里的家如果这一组所有账号都还没查到到期（没点过「查询余额」），
+ * 设置项会标注「暂无数据」而不是假装可用。
+ */
+const CREDIT_EXPIRY_PROVIDERS: ReadonlySet<string> = new Set([
+  'workbuddy',
+  'workbuddy-intl',
+  'trae',
+  'officeace',
+])
+
+/**
+ * 这一家能不能按「积分到期时间」排序（方案 A：静态能力名单）。
+ *
+ * 只看名单而不是运行时有没有读到读数：排序规则是用户**预先设定**的偏好，
+ * 设置弹窗里得先能勾上它；某个账号此刻读没读到由 `creditExpiryOf` 回答
+ * （读不到的恒排最后，不会因此丢失规则）。
+ */
+export function supportsCreditExpiry(provider: string | null | undefined): boolean {
+  return CREDIT_EXPIRY_PROVIDERS.has(provider || '')
+}
+
+/**
  * 上游套餐名是否为免费版（`^free$`，不区分大小写）。
  *
  * 判定必须比**上游原始名**（后端 `plan_name` 取 `package_name_en`，现网给过 `Free`），
@@ -1246,6 +1363,32 @@ export function positionMap(all: AccountRecord[] | null | undefined): Map<string
 
 /* ─── 分组（账号页的显示口径）────────────────── */
 
+/**
+ * 组内排序规则的一项。**按数组顺序比较**（第一项相同才看第二项），
+ * 与设置弹窗里从上到下的优先级是同一个东西。
+ *
+ * 只登记「可比较的字段」这两项：`manual` 不是一条规则，它是所有规则都相等时的
+ * 兜底（保持拖出来的顺序），所以不在这里出现。
+ */
+export type GroupSortRule =
+  | { key: 'credit'; on: boolean; dir: 'soon' | 'late' }
+  | { key: 'added'; on: boolean; dir: 'new' | 'old' }
+
+/**
+ * 默认规则：两条都**关闭**（= 默认回到纯手动顺序）。
+ *
+ * ── 为什么默认关 ──────────────────────────────────────────────
+ * 排序规则换掉的是用户已经拖熟的组内顺序。不打招呼就生效，用户第一次想拖
+ * 会发现把手锁着、顺序也变了，只会当成 bug。所以规则**只作为可选能力**存在：
+ * 想要「快到期先试」的人自己去分组设置里勾上，不想要的人行为与改造前一致。
+ *
+ * 两条规则仍然都列在设置弹窗里（默认未勾选）—— 那是「可选项」，不是「已生效」。
+ */
+export const DEFAULT_GROUP_SORT: GroupSortRule[] = [
+  { key: 'credit', on: false, dir: 'soon' },
+  { key: 'added', on: false, dir: 'new' },
+]
+
 export type AccountGroup = {
   /** 这一组的家（provider id） */
   provider: string
@@ -1253,14 +1396,73 @@ export type AccountGroup = {
   label: string
   /** 组顺位（1 起）：拖动整组改变的就是它 */
   rank: number
-  /** 组内**全部**账号（按组内优先级升序，不受筛选影响）：组内序号、统计、以及
-   *  「整队重排」时拼队列都用它 —— 折叠起来的组在 DOM 里没有行，只有这里留着全量 */
+  /** 组内**全部**账号，**显示顺序**（按这一组的排序规则，不受筛选影响）：
+   *  组内序号、统计都用它。开着规则时它与 `queueMembers` 不同。 */
   members: AccountRecord[]
+  /**
+   * 组内全部账号的**转发顺序**（= 落库的 priority 升序）。
+   *
+   * 排序规则是纯展示偏好，不写库 —— 所以「整队重排」拼队列时必须用它而不是
+   * `members`：拿显示顺序拼队列，拖一次整组就把规则排出来的先后悄悄写成了真实
+   * 转发优先级。没开规则时两者逐项相同（`sortGroupMembers` 原样返回）。
+   */
+  queueMembers: AccountRecord[]
   /** 组内**可见**的账号（members 里通过筛选的那些，顺序同上）：渲染用它 */
   accounts: AccountRecord[]
   enabled: number
   disabled: number
   limited: number
+}
+
+/**
+ * 一组账号按规则排序（不改变入参数组）。
+ *
+ * ── 为什么「没有值」恒排最后 ──────────────────────────────────
+ * 排序方向只决定**有值的那批**谁先谁后。把「读不到到期时间」当成 0 或者当成
+ * 无穷大，都会让方向一翻就把它甩到最前 —— 而「读不到」不是一个时间，它不该
+ * 因为用户点了「最晚到期优先」就跑到第一位。
+ *
+ * ── 全相等时保持手动顺序 ──────────────────────────────────────
+ * `Array.prototype.sort` 在 ES2019 起是稳定排序，这里不依赖它：显式带上原始下标，
+ * 让「所有规则都相等 → 保持拖出来的顺序」成为代码里看得见的一条，而不是引擎的实现细节。
+ */
+export function sortGroupMembers(
+  members: AccountRecord[],
+  rules: GroupSortRule[] | null | undefined,
+  usageOf?: UsageLookup,
+  now = Date.now(),
+): AccountRecord[] {
+  const active = (rules || []).filter(rule => rule.on)
+  if (!active.length) return members.slice()
+  const indexed = members.map((account, index) => ({ account, index }))
+  const expiry = new Map<string, number | null>()
+  for (const { account } of indexed) {
+    expiry.set(account.id, creditExpiryOf(usageOf?.(account), now))
+  }
+  indexed.sort((left, right) => {
+    for (const rule of active) {
+      const diff = rule.key === 'added'
+        ? compareAdded(rule.dir, left.account, right.account)
+        : compareExpiry(rule.dir, expiry.get(left.account.id) ?? null, expiry.get(right.account.id) ?? null)
+      if (diff !== 0) return diff
+    }
+    return left.index - right.index
+  })
+  return indexed.map(item => item.account)
+}
+
+function compareAdded(dir: 'new' | 'old', left: AccountRecord, right: AccountRecord): number {
+  const a = Number(left.addedAt) || 0
+  const b = Number(right.addedAt) || 0
+  // 缺 addedAt 的旧记录按 0 处理（= 最早），两侧都缺时相等
+  return dir === 'new' ? b - a : a - b
+}
+
+function compareExpiry(dir: 'soon' | 'late', a: number | null, b: number | null): number {
+  if (a === null && b === null) return 0
+  if (a === null) return 1
+  if (b === null) return -1
+  return dir === 'soon' ? a - b : b - a
 }
 
 /**
@@ -1273,12 +1475,18 @@ export type AccountGroup = {
  *
  * `keep` 是可见性谓词（筛选 / 搜索），**只过滤组内的行、不参与定组序**：筛选时
  * 组序不跳动，被筛掉的行也不会让整组消失（组头还在，只是组内空了）。
+ *
+ * ── `sortOf`：按组的排序规则（见 sortGroupMembers）────────────
+ * 只重排**组内**的显示顺序；组顺位（`rank`）仍由队列里最靠前的那个账号决定 ——
+ * 那是转发顺序，不是查看顺序，拖整组改的才是它。排序规则不写库：它是「这一组
+ * 想先看谁」的展示偏好，而转发顺序只能由用户显式拖动来表达。
  */
 export function accountGroups(
   all: AccountRecord[] | null | undefined,
   keep?: ((account: AccountRecord) => boolean) | null,
   usageOf?: UsageLookup,
   tokenUsageOf?: TokenUsageLookup,
+  sortOf?: ((provider: string) => GroupSortRule[] | null | undefined) | null,
 ): AccountGroup[] {
   const ordered = (all || []).slice().sort(byPriorityOrder)
   const providers: string[] = []
@@ -1293,15 +1501,17 @@ export function accountGroups(
   }
   return providers.map((provider, index) => {
     const list = members.get(provider) || []
+    const shown = sortOf ? sortGroupMembers(list, sortOf(provider), usageOf) : list
     return {
       provider,
       label: shared().wbProviders?.labelOf?.(provider) || provider,
       rank: index + 1,
-      members: list,
-      accounts: keep ? list.filter(keep) : list,
-      enabled: list.filter(isEnabled).length,
-      disabled: list.filter(account => !isEnabled(account)).length,
-      limited: list.filter(account =>
+      members: shown,
+      queueMembers: list,
+      accounts: keep ? shown.filter(keep) : shown,
+      enabled: shown.filter(isEnabled).length,
+      disabled: shown.filter(account => !isEnabled(account)).length,
+      limited: shown.filter(account =>
         isEnabled(account) && isLimitedNow(account, usageOf?.(account), tokenUsageOf?.(account))).length,
     }
   })

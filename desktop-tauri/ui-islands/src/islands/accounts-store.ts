@@ -27,13 +27,15 @@
 import { shared, type AccountRecord, type AccountsSnapshot, type ClashSnapshot } from './accounts-shared'
 import {
   accountGroups, byPriorityOrder, filterCounts, matchesFilter, positionMap, providerSummaries,
-  visibleAccounts, type AccountFilter, type AccountGroup, type TokenUsageLookup, type UsageLookup,
+  visibleAccounts, DEFAULT_GROUP_SORT,
+  type AccountFilter, type AccountGroup, type GroupSortRule, type TokenUsageLookup, type UsageLookup,
 } from './accounts-domain'
 
-/** 弹窗状态：账号设置（单个）/ 批量操作（多选 + 动作），关闭即 null */
+/** 弹窗状态：账号设置（单个）/ 批量操作（多选 + 动作）/ 分组设置（单组），关闭即 null */
 export type AccountsDialog =
   | { kind: 'settings'; id: string }
   | { kind: 'batch'; ids: string[]; action: string }
+  | { kind: 'group'; provider: string }
   | null
 
 export type AccountsStore = {
@@ -53,6 +55,18 @@ export type AccountsStore = {
   usageBusy: boolean
   /** 余额查询在途的账号（行上那颗「余额」按钮的去重闸） */
   usageInflight: ReadonlySet<string>
+  /**
+   * 组头「可用合计」是否只累加**当前筛选 / 搜索后可见的行**。
+   * 默认关闭（= 按整组求和，见 accounts-panels 的 groupBalanceOf）；开关在
+   * 设置 → 显示 → 账号列表里。与 namesHidden 同属「怎么看这张表」的偏好。
+   */
+  groupTotalFiltered: boolean
+  /**
+   * 每家自己的**组内排序规则**（provider → 规则数组，按数组顺序比较）。
+   * 没有键 = 用 `DEFAULT_GROUP_SORT`（积分到期 → 添加时间），规则可被关掉；
+   * 见 accounts-domain 的 sortGroupMembers。与 collapsed 同一档展示偏好，落盘保存。
+   */
+  groupSort: Readonly<Record<string, GroupSortRule[]>>
 }
 
 /* ─── 跨次启动的记忆键 ───────────────────────── */
@@ -63,6 +77,50 @@ const COLLAPSED_KEY = 'workbuddy-desktop-accounts-collapsed'
 /** 账号名隐藏开关（表头「账号」旁边那颗眼睛）：打开后账号列的名字整体显示成星号。
  *  这是「怎么看这张表」的偏好，与列宽同一档，存 localStorage 跨次启动保留 */
 const NAMES_HIDDEN_KEY = 'workbuddy-desktop-accounts-names-hidden'
+/**
+ * 组头合计的口径开关：`'1'` = 只加当前筛选后的可见行，缺省 / 其它 = 整组求和。
+ *
+ * 这个键是账号页与设置页**共用的契约**：两边都经本文件的 `readGroupTotalFiltered` /
+ * `setGroupTotalFiltered` 读写，不各自写一份字面量 —— 分开写的话，改键名时漏一处
+ * 就是「开关拨了不生效」。
+ */
+export const GROUP_TOTAL_FILTERED_KEY = 'workbuddy-desktop-accounts-group-total-filtered'
+
+/**
+ * 组内排序规则的记忆键：`{ [provider]: GroupSortRule[] }`。
+ *
+ * 只存**显式改过**的那些家（没改的留给 `DEFAULT_GROUP_SORT`）——
+ * 存全量的话，默认值以后要调整（比如把「添加时间」提到前面）时，
+ * 所有老用户都会被自己那份旧快照钉死在新默认之外。
+ */
+export const GROUP_SORT_KEY = 'workbuddy-desktop-accounts-group-sort'
+
+/** 读回组内排序规则（坏数据整段丢弃，不让一个手改坏的键把整页排序拖垮） */
+function loadGroupSort(): Record<string, GroupSortRule[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(GROUP_SORT_KEY) || '{}') as unknown
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const out: Record<string, GroupSortRule[]> = {}
+    for (const [provider, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (!Array.isArray(value)) continue
+      const rules: GroupSortRule[] = []
+      for (const item of value) {
+        if (!item || typeof item !== 'object') continue
+        const entry = item as Record<string, unknown>
+        if (entry.key === 'credit') {
+          rules.push({ key: 'credit', on: entry.on !== false, dir: entry.dir === 'late' ? 'late' : 'soon' })
+        } else if (entry.key === 'added') {
+          rules.push({ key: 'added', on: entry.on !== false, dir: entry.dir === 'old' ? 'old' : 'new' })
+        }
+      }
+      // 两条规则都没了的记录不入表：那是「回到默认」而不是「一条规则都不参与」
+      if (rules.length) out[provider] = rules
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
 
 /**
  * 读回筛选档位。
@@ -95,9 +153,28 @@ function loadCollapsed(): Set<string> {
   }
 }
 
+/** 账号名掩码的当前偏好（设置页也要读同一份，故与 loadNamesHidden 同源导出） */
+export function readNamesHidden(): boolean {
+  return loadNamesHidden()
+}
+
+/** 组头合计口径的当前偏好（设置页读它摆开关） */
+export function readGroupTotalFiltered(): boolean {
+  return loadGroupTotalFiltered()
+}
+
 function loadNamesHidden(): boolean {
   try {
     return localStorage.getItem(NAMES_HIDDEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+/** 组头合计口径：只有明确存过 '1' 才算「按筛选」，没存过 / 存坏都按整组（默认关闭） */
+function loadGroupTotalFiltered(): boolean {
+  try {
+    return localStorage.getItem(GROUP_TOTAL_FILTERED_KEY) === '1'
   } catch {
     return false
   }
@@ -116,6 +193,8 @@ let store: AccountsStore = {
   namesHidden: loadNamesHidden(),
   usageBusy: false,
   usageInflight: new Set<string>(),
+  groupTotalFiltered: loadGroupTotalFiltered(),
+  groupSort: loadGroupSort(),
 }
 
 const listeners = new Set<() => void>()
@@ -195,9 +274,49 @@ export function groupView(
     account => matchesFilter(account, store.filter, usageOf, tokenUsageOf),
     usageOf,
     tokenUsageOf,
+    groupSortRules,
   )
   const groups = allGroups.filter(group => group.accounts.length > 0)
   return { groups, allGroups }
+}
+
+/**
+ * 某一家当前的排序规则（没配过 = 默认规则的一份副本）。
+ *
+ * 返回副本而不是 `DEFAULT_GROUP_SORT` 本身：设置弹窗会就地改数组（上移 / 下移），
+ * 直接把默认值递出去等于让一次取消不掉的操作写进模块常量。
+ */
+export function groupSortRules(provider: string): GroupSortRule[] {
+  const saved = store.groupSort[provider]
+  if (saved) return saved.map(rule => ({ ...rule }))
+  return DEFAULT_GROUP_SORT.map(rule => ({ ...rule }))
+}
+
+/** 这一家有没有**显式改过**规则（设置弹窗据此决定「恢复默认」是否可点） */
+export function hasCustomGroupSort(provider: string): boolean {
+  return Boolean(store.groupSort[provider])
+}
+
+/**
+ * 写入某一家的排序规则。
+ *
+ * `null` = 删掉这条记录（回到默认）。空数组**不当作删除**：那是用户把两条规则
+ * 都关掉了（想纯手动排序），与「恢复默认」是两件事 —— 混成一个会让「关掉所有
+ * 规则」在下次启动时悄悄变回默认排序。
+ */
+export function setGroupSortRules(provider: string, rules: GroupSortRule[] | null): void {
+  if (!provider) return
+  const next: Record<string, GroupSortRule[]> = { ...store.groupSort }
+  if (rules === null) delete next[provider]
+  else next[provider] = rules.map(rule => ({ ...rule }))
+  persistGroupSort(next)
+  patch({ groupSort: next })
+}
+
+function persistGroupSort(groupSort: Readonly<Record<string, GroupSortRule[]>>): void {
+  try {
+    localStorage.setItem(GROUP_SORT_KEY, JSON.stringify(groupSort))
+  } catch { /* 隐私模式等存不了就算了：本次会话内仍然生效 */ }
 }
 
 export function providerSummaryList(): Array<{ id: string; label: string; count: number }> {
@@ -355,6 +474,39 @@ export function toggleNamesHidden(): void {
   const next = !store.namesHidden
   try { localStorage.setItem(NAMES_HIDDEN_KEY, next ? '1' : '0') } catch { /* 存不了只影响下次启动 */ }
   patch({ namesHidden: next })
+}
+
+/** 显式写入账号名掩码（设置页的开关用它；账号页表头那颗眼睛走 toggle） */
+export function setNamesHidden(next: boolean): void {
+  try { localStorage.setItem(NAMES_HIDDEN_KEY, next ? '1' : '0') } catch { /* 存不了只影响下次启动 */ }
+  patch({ namesHidden: next })
+}
+
+/* ─── 组头合计口径 ───────────────────────────── */
+
+/**
+ * 从存储里重读合计口径并同步到本页（只在**别的文档 / 窗口**改过时用得上）。
+ *
+ * 同一个文档内设置页与账号页共用这一份 store，设置页的写入直接走
+ * `setGroupTotalFiltered`，本页不需要再读盘。这条路径留给「另一个窗口 / 另一份
+ * 面板」改了偏好之后的 `storage` 事件 —— 不跟的话，那个窗口里拨的开关要刷新
+ * 整页才生效。没变化时不 patch，免得每次存储事件都白白重画一遍表格。
+ */
+export function syncGroupTotalPreference(): void {
+  const next = loadGroupTotalFiltered()
+  if (next === store.groupTotalFiltered) return
+  patch({ groupTotalFiltered: next })
+}
+
+/**
+ * 写入合计口径（设置页的开关调它；账号页订阅同一份 store，因此立即重画）。
+ *
+ * 落盘与内存两件事一起做：只落盘的话，同文档里已经挂载的账号页收不到
+ * `storage` 事件（那个事件只在**别的**文档 / 窗口里触发），切回去还是旧口径。
+ */
+export function setGroupTotalFiltered(next: boolean): void {
+  try { localStorage.setItem(GROUP_TOTAL_FILTERED_KEY, next ? '1' : '0') } catch { /* 存不了只影响下次启动 */ }
+  patch({ groupTotalFiltered: next })
 }
 
 /**

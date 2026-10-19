@@ -73,11 +73,11 @@ import { isDesktopAccount, isEnabled, providerOf, supportsUsage } from './accoun
 import { ACCOUNT_COLUMNS, bindColumnGrips, columnWidths, tableMinWidth } from './accounts-columns'
 import {
   allAccounts, bump, clearFilter, clearLimits, clearSelection, ensureProxyPoolOptions,
-  filterActive, getStore, groupView, installAccountsApi, normalizeProviderFilter, openBatchDialog,
+  filterActive, getStore, groupSortRules, groupView, installAccountsApi, normalizeProviderFilter, openBatchDialog,
   providerSummaryList, queryAllUsage, reorderQueue, rowContext, seats, segmentCounts,
   setAllGroupsCollapsed, setAllPicked, setProviderFilter, setSearchFilter, setSegmentFilter,
-  snapshot, startConnectionsPolling, subscribe, subscribeProxyPool, tokenUsageOf, togglePick,
-  usageEntryOf,
+  snapshot, startConnectionsPolling, subscribe, subscribeProxyPool, syncGroupTotalPreference,
+  tokenUsageOf, togglePick, usageEntryOf, GROUP_TOTAL_FILTERED_KEY,
 } from './accounts-data'
 import {
   AccountCell, ActionsCell, ConnectionsCell, ExpiryCell, GroupBandRow, LimitsCell, OrderCell,
@@ -108,6 +108,11 @@ let headSignature = ''
 /** 当前可见列（顺序即配置顺序；列设置未就绪时退回全部列） */
 function visibleColumns(): Array<(typeof ACCOUNT_COLUMNS)[number] & { align: 'left' | 'center' | 'right' }> {
   return colHandle ? colHandle.apply(ACCOUNT_COLUMNS) : ACCOUNT_COLUMNS
+}
+
+/** 该账号所属组的排序规则是否生效（生效时组内把手锁定：拖了也会被规则排回去） */
+function sortActiveIn(account: AccountRecord): boolean {
+  return groupSortRules(providerOf(account)).some(rule => rule.on)
 }
 
 /** 触发一次重绘（store 换快照 → 订阅者重画） */
@@ -197,6 +202,17 @@ function AccountsPage() {
   // 存盘里筛的那一家已经不在摘要里（账号删光、家也删了）就复位成「全部」—— 否则下拉
   // 找不到那一项、回落显示「全部」，列表却仍按它过滤（见 store 的 normalizeProviderFilter）
   React.useEffect(() => { normalizeProviderFilter() }, [store.version])
+
+  // 设置页拨了「积分合计只统计当前筛选出来的账号」之后，本页要立刻按新口径重画。
+  // 本页自己的写入走 store（同文档内 localStorage 不触发自己的 storage 事件），
+  // 这条监听只接**别处**（设置页 / 另一个窗口）的写入。
+  React.useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === GROUP_TOTAL_FILTERED_KEY) syncGroupTotalPreference()
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   // 列设置的注册必须在挂载后：按钮要插进本岛渲染出来的 `.batch-actions`，而
   // syncStaticHead 要求登记表已存在（它按 id 查配置）。用布局 effect 是为了让首屏的
@@ -316,16 +332,22 @@ function AccountsPage() {
       const to = anchor === null || at < 0 ? rest.length : at
       if (to === from) return
       const next = [...rest.slice(0, to), moved, ...rest.slice(to)]
-      const queue = next.flatMap(group => group.members.map(account => account.id))
+      // 拼队列用 `queueMembers`（真实转发顺序）而不是 `members`（当前排序规则下的
+      // 显示顺序）：拿显示顺序拼队列，拖一次整组就会把规则排出来的先后写成真实优先级。
+      // 组内行同样（见下面的分支）。
+      const queue = next.flatMap(group => group.queueMembers.map(account => account.id))
       void reorderQueue(queue, t('{name} 移到第 {rank} 顺位', { name: moved.label, rank: to + 1 }))
       return
     }
     const group = current.find(item => item.provider === drop.provider)
     if (!group) return
-    const from = group.members.findIndex(account => account.id === drop.accountId)
+    // 组内拖动只在「没有排序规则」时才走得通（起拖那一刻已被 isRowLocked 拦下），
+    // 此时 queueMembers 与 members 逐项相同；仍按 queueMembers 取，是为了让
+    // 「拼队列只用真实转发顺序」这条纪律在这个分支上也成立，而不是靠调用时机。
+    const from = group.queueMembers.findIndex(account => account.id === drop.accountId)
     if (from < 0) return
-    const moved = group.members[from]
-    const rest = group.members.filter((_, position) => position !== from)
+    const moved = group.queueMembers[from]
+    const rest = group.queueMembers.filter((_, position) => position !== from)
     // 落点下标来自**渲染出来的**那些行（筛选 / 搜索 / 分页会把组内的行裁掉一部分），
     // 而重排要的是完整 members —— 按锚点换算：插到第 N 个渲染行之前 = 完整 members
     // 里那行所在的下标之前；N 等于渲染行数 = 插到组尾（被裁掉的行留在原处）。
@@ -338,8 +360,10 @@ function AccountsPage() {
     const to = anchor === null || at < 0 ? rest.length : at
     if (to === from) return
     const nextMembers = [...rest.slice(0, to), moved, ...rest.slice(to)]
-    const next = current.map(item => item.provider === drop.provider ? { ...item, members: nextMembers } : item)
-    const queue = next.flatMap(item => item.members.map(account => account.id))
+    const next = current.map(item => item.provider === drop.provider
+      ? { ...item, members: nextMembers, queueMembers: nextMembers }
+      : item)
+    const queue = next.flatMap(item => item.queueMembers.map(account => account.id))
     void reorderQueue(queue, t('{name} 移到 {group} 组内第 {rank} 位', {
       name: String(moved.name || moved.id), group: t(group.label), rank: to + 1,
     }))
@@ -356,6 +380,13 @@ function AccountsPage() {
         t('当前视图不能调整组顺位：{reason} 之后再拖动', { reason: dragHandlers.current.lockReason }),
         'err',
       ),
+      isRowLocked: provider => groupSortRules(provider).some(rule => rule.on),
+      onRowLockedAttempt: provider => toast(
+        t('「{name}」开着排序规则：先关掉规则，才能手动调整组内顺序', {
+          name: t(shared().wbProviders?.labelOf?.(provider) || provider),
+        }),
+        'err',
+      ),
       onDrop: drop => dragHandlers.current.onDrop(drop),
     })
   }, [])
@@ -370,7 +401,7 @@ function AccountsPage() {
             onCheckedChange={next => togglePick(account.id, next)} />
         )
       case 'order':
-        return <OrderCell account={account} rank={ctx.rank} />
+        return <OrderCell account={account} rank={ctx.rank} sortActive={sortActiveIn(account)} />
       case 'account':
         return <AccountCell account={account} namesHidden={store.namesHidden} />
       case 'proxy':

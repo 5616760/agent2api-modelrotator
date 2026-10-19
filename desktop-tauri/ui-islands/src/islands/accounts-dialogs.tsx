@@ -18,6 +18,7 @@
  */
 
 import * as React from 'react'
+import { useSyncExternalStore } from 'react'
 import {
   Button,
   Checkbox,
@@ -61,7 +62,9 @@ import {
 import { limiterDraftOf, LimiterSection, readLimiterChanges } from './accounts-dialog-limiter'
 import {
   allAccounts, clashOptions, closeDialog, findAccount, getStore, proxyPoolOptions,
+  subscribe,
 } from './accounts-data'
+import { GroupSettingsDialog } from './accounts-group-settings'
 
 /** 名称长度上限，与后端 custom_providers::MAX_NAME_CHARS 一致（前端先挡一次） */
 const MAX_PROVIDER_NAME_CHARS = 64
@@ -1436,15 +1439,21 @@ const verb = { enable: t('启用'), disable: t('禁用'), proxy: t('修改代理
 /* ─── 供页面调用的入口 ───────────────────────── */
 
 /**
- * 两个弹窗的宿主：按 store 里的 dialog 状态挂载。
+ * 三个弹窗的宿主：按 store 里的 dialog 状态挂载。
  * 弹窗走组件库的 Dialog（Esc / 点遮罩关闭、焦点陷阱、滚动锁定都内建），关闭即卸载 ——
  * index.html 里那两个常驻的 `#account-modal` / `#batch-modal` 因此不再需要。
+ *
+ * 分组设置（`kind: 'group'`）的单体在 accounts-group-settings.tsx：它只跟一家打交道，
+ * 内容与账号设置、批量操作都不重叠，没必要塞进这个已经一千五百行的文件。
  */
 export function AccountsDialogs() {
-  const store = getStore()
+  const store = useSyncExternalStore(subscribe, () => getStore())
   if (!store.dialog) return null
   if (store.dialog.kind === 'settings') {
     return <AccountSettingsDialog key={store.dialog.id} id={store.dialog.id} onClose={closeDialog} />
+  }
+  if (store.dialog.kind === 'group') {
+    return <GroupSettingsDialog key={store.dialog.provider} provider={store.dialog.provider} onClose={closeDialog} />
   }
   return <BatchDialog key={store.dialog.ids.join(',')} ids={store.dialog.ids} action={store.dialog.action}
     onClose={closeDialog} />

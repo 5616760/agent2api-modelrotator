@@ -54,11 +54,12 @@ import { CreditDetailButton, creditRowsOf } from './accounts-credit-detail'
 import { LimitDetailButton, limitRowsOf } from './accounts-limit-detail'
 import {
   PROXY_CUSTOM_CURRENT, PROXY_CUSTOM_EDIT, applyProxyPick,
-  connectionsOf, maskName, openBatchDialog, openSettingsDialog, openZcodePlans,
+  connectionsOf, getStore, groupSortRules, maskName, openBatchDialog, openGroupDialog, openSettingsDialog, openZcodePlans,
   poolError, proxyPoolSnapshot, queryUsageOnce, setAccountEnabled, setGroupEnabled,
   tokenUsageOf, toggleGroupCollapsed, toggleNamesHidden, usageEntryOf, usageFailureOf,
 } from './accounts-data'
 import type { AccountGroup } from './accounts-domain'
+import { groupSortSummary } from './accounts-group-settings'
 import { PROVIDER_ICONS } from './add-provider-pick'
 import { t } from '../i18n'
 
@@ -81,13 +82,26 @@ function iconHtml(name: string, size: number): string {
  * 把手是**唯一**的拖动起点（不是整行都能拖）：行里还有开关、下拉、按钮，整行可拖会
  * 让「点一下开关」变成「拖走了一行」。序号显示的是它在**本组内**的位次，组与组之间的
  * 先后由分组带的顺位表达 —— 两者合起来才是真实的尝试顺序。
+ *
+ * ── `sortActive`：这一组开着排序规则时把手锁定 ────────────────
+ * 顺序此时由规则算出来，拖它没有意义（松手之后一次重排又会按规则排回去）。
+ * 把手压淡、光标换成禁止，点击给一次说明（由 accounts-queue-drag 的 onLockedAttempt
+ * 统一提示）—— 静默不响应会让人以为界面卡了。
  */
-export function OrderCell({ account, rank }: { account: AccountRecord; rank: number }) {
+export function OrderCell({ account, rank, sortActive }: {
+  account: AccountRecord
+  rank: number
+  sortActive?: boolean
+}) {
   const label = t('组内第 {rank} 位', { rank })
   return (
     <div className='order-cell'>
-      <span className='order-grip' role='button' tabIndex={-1} aria-label={t('拖动调整组内顺序')}
-        title={t('按住拖动，调整这个账号在本组内的顺序')}
+      <span className={`order-grip${sortActive ? ' locked' : ''}`} role='button' tabIndex={-1}
+        aria-label={t('拖动调整组内顺序')}
+        aria-disabled={sortActive || undefined}
+        title={sortActive
+          ? t('这一组开着排序规则：关掉规则后才能手动拖')
+          : t('按住拖动，调整这个账号在本组内的顺序')}
         dangerouslySetInnerHTML={{ __html: iconHtml('gripVertical', 14) }} />
       <span className='order-rank' title={label}>{`#${rank}`}</span>
     </div>
@@ -155,7 +169,7 @@ function GroupMenu({ group, ids, collapsed }: { group: AccountGroup; ids: string
 type GroupBalance = {
   /** 能相加的账号数 */
   counted: number
-  /** 本组账号总数（含没查 / 失败 / 只给比例的） */
+  /** 参与统计的账号数（整组口径 = 组内全部；按筛选口径 = 可见的那些） */
   total: number
   /** 合计；一个都加不起来时 null */
   sum: number | null
@@ -171,15 +185,23 @@ type GroupBalance = {
   pending: number
   /** 半次失败（两台网关有一台没回话）：读数计入，但要点 ⚠ */
   partial: number
+  /** 求和口径：整组（默认）还是当前筛选后的可见行 —— tooltip 要照着说 */
+  scope: 'group' | 'filtered'
 }
 
 /**
- * 组头合计：这一组**全部**账号的可用余额之和。
+ * 组头合计：这一组账号的可用余额之和。
  *
- * ── 为什么按整组求和，不按筛选 / 分页 ────────────────────────
- * 与相邻那句「N 个账号 · 启用 x · 禁用 y」同一口径：组头回答的是「这一家有多少
- * 家底」，不是「这一屏显示了多少」。而且组折叠起来之后，行都没了，组头这个合计
- * 是唯一还看得见的余额读数 —— 它要是随筛选跳，收起来就连个稳当的数都没有。
+ * ── 两种口径（设置 → 显示 → 账号列表 的开关切）──────────────
+ *   · **整组**（默认）：算这一组**全部**账号，不受筛选 / 搜索 / 分页影响。
+ *     组头回答的是「这一家有多少家底」，而组折叠起来之后行都没了，组头这个
+ *     合计是唯一还看得见的余额读数 —— 它要是随筛选跳，收起来连个稳当的数都没有。
+ *   · **按筛选**（用户显式打开）：只算当前可见的行，与筛选徽标所见即所得。
+ *     总量口径会让人困惑：明明只显示一行 100，合计却是 1,000（另一行的 900
+ *     被筛掉了却仍计入）—— 打开这个开关就得到 100。
+ *
+ * 分页**不**参与这个开关：口径说的是「筛选 / 搜索」，翻页只是看同一份结果的
+ * 不同屏，把合计切成「当前页之和」会让同一个筛选下每翻一页数字都变。
  *
  * ── 为什么禁用账号也算 ────────────────────────────────────
  * 余额是**资产**不是流量：禁用只表示不参与转发，额度仍在账上。只算启用的话，
@@ -194,10 +216,10 @@ type GroupBalance = {
  * 单位不同的不相加：同一家理论上不会出现，真出现就按第一个计入的单位记账，
  * 其余算「没计入」—— 把两种单位加成一个数才是真正的谎。
  */
-function groupBalanceOf(members: AccountRecord[]): GroupBalance {
+function groupBalanceOf(members: AccountRecord[], scope: 'group' | 'filtered' = 'group'): GroupBalance {
   const out: GroupBalance = {
     counted: 0, total: members.length, sum: null, unlimited: 0, unit: '',
-    failed: 0, uncountable: 0, pending: 0, partial: 0,
+    failed: 0, uncountable: 0, pending: 0, partial: 0, scope,
   }
   let sum = 0
   for (const account of members) {
@@ -241,9 +263,13 @@ function balanceAmountText(value: number): string {
   return api?.formatTokens ? api.formatTokens(value) : numberText(value)
 }
 
-/** 合计的悬停全文：先讲口径（整组、不受筛选影响），再把没算进来的逐条交代 */
+/** 合计的悬停全文：先讲口径（整组 / 按筛选），再把没算进来的逐条交代 */
 function groupBalanceTitle(balance: GroupBalance): string {
-  const parts = [t('本组 {n} 个账号的可用余额之和，按整组统计（不受筛选、搜索影响）', { n: balance.total })]
+  const parts = [
+    balance.scope === 'filtered'
+      ? t('当前筛选下 {n} 个账号的可用余额之和（随筛选、搜索变化，不受分页影响）', { n: balance.total })
+      : t('本组 {n} 个账号的可用余额之和，按整组统计（不受筛选、搜索影响）', { n: balance.total }),
+  ]
   parts.push(t('{n} 个已计入', { n: balance.counted }))
   if (balance.unlimited) parts.push(t('含 {n} 个不限额度账号，合计记为 ∞', { n: balance.unlimited }))
   if (balance.pending) parts.push(t('{n} 个还没查到（未查询或正在查询）', { n: balance.pending }))
@@ -291,8 +317,8 @@ function GroupBalanceBadge({ balance }: { balance: GroupBalance }) {
  *
  * 从左到右：拖动把手（整组顺位的唯一拖动起点）→ 顺位 → 家图标 + 家名 → 统计
  * （N 个账号 · 启用 x · 禁用 y · 限流 z）→ 可用合计 → 右侧折叠箭头与 ⋯ 菜单。
- * 统计与合计读的都是**整组**（不受筛选影响）：它们回答「这一家有多少账号、多少
- * 家底」，不是「当前显示几行」。
+ * 统计读的永远是**整组**（「这一家有多少账号」不随筛选变）；合计的口径由设置里
+ * 的开关决定（见 `groupBalanceOf`）：默认整组，打开后只算当前可见的行。
  *
  * 样式刻意保持中性（surface 底 + 一条 hairline）：一家一色会让整页像调色板，
  * 而「哪一段是哪一家」由家名与图标已经说清楚了。
@@ -303,14 +329,34 @@ export function GroupBandRow({ group, collapsed, colSpan }: {
   colSpan: number
 }) {
   const icon = PROVIDER_ICONS[group.provider]
-  // 合计只在「有求和的余地」时出现：一个账号的组，合计与下面那行读数逐字重复；
-  // 不支持余额查询的家，挂一个永远的「—」只是噪音
-  const balance = group.members.length > 1 && group.members.some(supportsUsage)
-    ? groupBalanceOf(group.members)
+  // 合计口径：默认整组（`members`），设置里打开「按筛选」后改用可见行（`accounts`）。
+  // 分页不参与 —— 见 groupBalanceOf 的说明。
+  const filtered = getStore().groupTotalFiltered
+  const members = filtered ? group.accounts : group.members
+  // 「值不值得画合计」看的是**整组**有几个账号（一个账号的组，合计与下面那行读数
+  // 逐字重复）；而**加哪些账号**看的是当前口径。两者不能合成一个判据：按筛选口径下
+  // 筛出唯一一行时，合计正是用户要的那个数（100），不能因为「可见只剩一行」就藏掉。
+  const worthSumming = group.members.length > 1 && members.length > 0
+  const balance = worthSumming && members.some(supportsUsage)
+    ? groupBalanceOf(members, filtered ? 'filtered' : 'group')
     : null
+  /**
+   * 整条分组带可点折叠。
+   *
+   * 判定「这一下算不算点击带宽」交给事件目标：落在按钮 / 拖动把手 / 链接 / 表单控件
+   * 上的点击都有各自的动作，不能顺手把组收起来。放在容器上而不是每个子元素上，
+   * 是因为带宽里还有家名、统计、合计这些纯文本 —— 用户点它们时心里想的就是「收起来」。
+   */
+  const onBandClick = (event: React.MouseEvent<HTMLTableCellElement>) => {
+    if ((event.target as Element | null)?.closest?.('button, a, input, select, label, .queue-grip')) return
+    // 拖选文字时（正在复制账号名）不折叠：那一下是选择而不是点击
+    if (String(window.getSelection?.() || '').length > 0) return
+    toggleGroupCollapsed(group.provider)
+  }
+  const sortSummary = groupSortSummary(groupSortRules(group.provider))
   return (
     <tr className='grp-band' data-provider={group.provider}>
-      <td colSpan={colSpan}>
+      <td colSpan={colSpan} onClick={onBandClick}>
         <div className='grp-band-inner'>
           <span className='queue-grip' role='button' tabIndex={-1} aria-label={t('拖动调整整组顺序')}
             title={t('按住拖动，调整这一家的组顺位（整组一起动）')}
@@ -331,11 +377,23 @@ export function GroupBandRow({ group, collapsed, colSpan }: {
             limited: group.limited > 0 ? t(' · 限流 {n}', { n: group.limited }) : '',
           })}</span>
           {balance ? <GroupBalanceBadge balance={balance} /> : null}
+          {sortSummary ? (
+            <button type='button' className='grp-sort-mark'
+              title={t('当前排序规则：{rules}。点击调整', { rules: sortSummary })}
+              onClick={() => openGroupDialog(group.provider)}>
+              <span dangerouslySetInnerHTML={{ __html: iconHtml('sort', 10) }} />
+              {sortSummary}
+            </button>
+          ) : null}
           <span className='grp-spacer' />
           <button type='button' className='grp-iconbtn grp-fold' aria-expanded={!collapsed}
             title={collapsed ? t('展开这一组') : t('折叠这一组')}
             onClick={() => toggleGroupCollapsed(group.provider)}
             dangerouslySetInnerHTML={{ __html: iconHtml('chevronDown', 14) }} />
+          <button type='button' className='grp-iconbtn' title={t('分组设置')}
+            aria-label={t('分组设置')}
+            onClick={() => openGroupDialog(group.provider)}
+            dangerouslySetInnerHTML={{ __html: iconHtml('settings', 14) }} />
           <GroupMenu group={group} ids={group.accounts.map(account => account.id)} collapsed={collapsed} />
         </div>
       </td>

@@ -80,7 +80,7 @@ export async function streamAssistantChat(options: {
   const body: Record<string, unknown> = {
     messages: options.messages.map(wireMessage),
   }
-  // 不传 model 时由网关用「设置 → AI 助手」里存的默认模型兜底
+  // 不传 model 时由网关用「助手设置」里存的默认模型兜底
   if (options.model) body.model = options.model
   if (options.reasoning) body.reasoning = options.reasoning
   // 工具表为空时**不要发空数组**：后端按「有没有 tools」决定注不注入系统提示词

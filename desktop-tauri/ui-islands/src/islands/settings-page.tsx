@@ -134,15 +134,17 @@ import {
   type SettingsSnapshot,
   type StorageState,
 } from './settings-state'
+// 账号列表的两项偏好与账号页共用同一份 store：设置页写、账号页订阅，
+// 因此两边读写必须走同一组函数（别在这里自己 localStorage.setItem 一份字面量）
+import {
+  readGroupTotalFiltered, readNamesHidden, setGroupTotalFiltered, setNamesHidden, subscribe,
+} from './accounts-store'
 import {
   GatewayTextButton,
   ProviderPromptTextButton,
   PromptTextButton,
   gatewayEditedText,
 } from './settings-prompt-editor'
-// AI 助手分类的面板（对话模型 / 系统提示词 / 工具勾选）。独立成文件、自带一份
-// 数据流（/api/assistant/config），见该文件的模块头
-import { AssistantSettingsPane } from './assistant-settings-pane'
 // 云同步面板（设置 → 数据）：独立成文件、自带一份数据流（/api/cloud-sync），
 // 与设置页的快照 store 没有交集，见该文件的模块头
 import { CloudSyncPanel } from './settings-cloud-sync'
@@ -497,6 +499,10 @@ function themeStateText(mode: ThemeMode): string {
 function DisplayPane() {
   const [theme, setTheme] = React.useState<ThemeMode>(readThemeMode)
   const [zoom, setZoom] = React.useState<number>(readZoomPercent)
+  // 账号列表的两项「怎么看这张表」偏好：合计口径与账号名掩码。
+  // 与主题 / 缩放同属纯前端偏好（localStorage），不经过 settings-state 的快照。
+  const [groupTotalFiltered, setGroupTotalFilteredState] = React.useState<boolean>(readGroupTotalFiltered)
+  const [namesHidden, setNamesHiddenState] = React.useState<boolean>(readNamesHidden)
   // 端别取自桥（platform）而不是 navigator：与设置页其它端别判断同一口径
   const isWeb = shared().workbuddyDesktop?.platform === 'web'
 
@@ -512,6 +518,36 @@ function DisplayPane() {
       window.removeEventListener(ZOOM_EVENT, onZoom)
     }
   }, [])
+
+  // 账号列表的两项偏好：设置页写、账号页订阅同一份 store。这里同时听两路变化 ——
+  //   · store 订阅：账号页表头那颗眼睛（toggleNamesHidden）/ 另一个入口写入时，
+  //     本页的开关要跟着拨过去（同文档内的 localStorage 写入不触发 storage 事件，
+  //     只靠那一路会漏）；
+  //   · storage 事件：另一个窗口 / 另一份面板改了偏好。
+  React.useEffect(() => {
+    const sync = () => {
+      setGroupTotalFilteredState(readGroupTotalFiltered())
+      setNamesHiddenState(readNamesHidden())
+    }
+    window.addEventListener('storage', sync)
+    const off = subscribe(sync)
+    return () => {
+      window.removeEventListener('storage', sync)
+      off()
+    }
+  }, [])
+
+  /** 改合计口径：落盘 + 通知账号页（同一个 store，订阅者一起重画） */
+  function applyGroupTotalFiltered(next: boolean): void {
+    setGroupTotalFiltered(next)
+    setGroupTotalFilteredState(next)
+  }
+
+  /** 改账号名掩码：与账号页表头那颗眼睛走同一个写入函数 */
+  function applyNamesHidden(next: boolean): void {
+    setNamesHidden(next)
+    setNamesHiddenState(next)
+  }
 
   const zoomLabel = zoom === 100 ? t('100%（默认）') : `${zoom}%`
 
@@ -579,6 +615,34 @@ function DisplayPane() {
         <div className='panel-body'>
           <LanguageRow />
           <div className='settings-state'>{STATES.languageHint}</div>
+        </div>
+      </section>
+
+      {/* 账号列表：合计口径 / 账号名掩码。与上面三项同属「怎么看这张表」的纯前端
+          偏好（localStorage，见 accounts-store 的 GROUP_TOTAL_FILTERED_KEY 与
+          NAMES_HIDDEN_KEY）—— 不碰转发、不碰账号数据，所以也不进 settings-state
+          的后端快照。账号页有自己的入口改这两项（表头那颗眼睛、合计徽标本身），
+          两边读写的是同一份键。 */}
+      <section className='panel'>
+        <PanelHead title={t('账号列表')} tip={TIPS.accountList} />
+        <div className='panel-body'>
+          <div className='settings-switches'>
+            <SwitchRow
+              id='settings-group-total-filtered'
+              label={t('积分合计只统计当前筛选出来的账号')}
+              checked={groupTotalFiltered}
+              onCheckedChange={applyGroupTotalFiltered}
+            />
+            <SwitchRow
+              id='settings-names-hidden'
+              label={t('隐藏账号名（显示成星号）')}
+              checked={namesHidden}
+              onCheckedChange={applyNamesHidden}
+            />
+          </div>
+          <div className='settings-state'>
+            {groupTotalFiltered ? STATES.groupTotalFilteredOn : STATES.groupTotalFilteredOff}
+          </div>
         </div>
       </section>
 
@@ -2469,12 +2533,9 @@ function SettingsPage() {
         <div className={paneClass('general')} data-cat='general'>
           <GeneralPane snap={snap} />
         </div>
-        {/* AI 助手：三块面板（对话模型 / 系统提示词 / 工具勾选）。它自带一份独立的
-            加载与保存（/api/assistant/config），不经过 settings-state 的快照 —— 见
-            assistant-settings-pane.tsx 的模块头 */}
-        <div className={paneClass('assistant')} data-cat='assistant'>
-          <AssistantSettingsPane />
-        </div>
+        {/* AI 助手的配置已搬到助手页自己的「助手设置」抽屉
+            （assistant-settings-drawer.tsx）—— 换模型 / 调工具都是聊天当中会做的
+            事，留在设置页意味着每次都要离开对话再切回来。 */}
         <div className={paneClass('display')} data-cat='display'>
           <DisplayPane />
         </div>

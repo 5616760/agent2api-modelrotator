@@ -565,7 +565,7 @@ pub fn panel_router(state: ServerState) -> Router {
         // 结论失败也返回 2xx（上游的错误放在响应体的 status / error 里，
         // 理由见 api::model_test 模块头）
         .route("/api/models/test", post(api::model_test::run_model_test))
-        // ── AI 助手（侧边栏「AI 助手」页 + 设置页「AI 助手」分类）──
+        // ── AI 助手（侧边栏「AI 助手」页：对话 + 会话 + 页面内设置抽屉）──
         // 对话那条会**真打上游、消耗额度**（与 /v1/chat/completions、
         // /api/models/test 同一量级），设置那条写配置，三条一起挂 protected。
         // 对话做成流式（SSE），前端必须绕开桌面壳的桥（桥无流式且 60 秒超时）

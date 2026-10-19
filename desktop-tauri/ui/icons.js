@@ -149,6 +149,14 @@
     chevronDown: '<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'
       + '<path d="m6 9 6 6 6-6"/></g>',
     /**
+     * 排序（分组带上「当前排序规则」那枚小标记）。
+     * 上下两个箭头 + 各自的短尾：读作「可以调先后」，与设置页那组描边图标同一套
+     * 约定（1.8 粗细、圆头）。显示 10px 时线宽约 0.75px —— 这一枚是脚注级的小标记，
+     * 比旁边 10.5px 的字略淡是刻意的。
+     */
+    sort: '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+      + '<path d="M8 5v14m0 0-3-3m3 3 3-3"/><path d="M16 19V5m0 0-3 3m3-3 3 3"/></g>',
+    /**
      * 折叠面板的展开箭头（`details.panel-fold` 的 summary 里，置于标题之前）。
      * 向右 = 收起；展开后由 CSS 旋转 90° 指向下方 —— 两个状态只差一个变换，
      * 所以只画这一个形状。几何与设置页那组描边图标同一套约定（1.8 粗细、

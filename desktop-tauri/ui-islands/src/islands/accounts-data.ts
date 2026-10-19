@@ -262,6 +262,18 @@ export function openBatchDialog(ids: string[], action = 'enable'): void {
   patch({ dialog: { kind: 'batch', ids: selected, action } })
 }
 
+/**
+ * 打开某一家的**分组设置**弹窗（分组带上齿轮那颗按钮）。
+ *
+ * 不做「这一家还在不在」的存在性校验：分组带本身是从分组视图渲染出来的，
+ * 打不开的组根本点不到；而设置里有些项（将来的默认展开 / 新账号落点）在
+ * 账号被删光之后仍然有意义，硬拦一次反而让弹窗随账号数闪没。
+ */
+export function openGroupDialog(provider: string): void {
+  if (!provider) return
+  patch({ dialog: { kind: 'group', provider } })
+}
+
 /* ─── 删除账号后的缓存清理 ───────────────────── */
 
 /** 清掉已删除账号的本地缓存（app.js 每次 refresh 后调用） */
