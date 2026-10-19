@@ -104,11 +104,28 @@ pub fn shim_js() -> &'static str {
     try { localStorage.removeItem(PANEL_AUTH); } catch (e) { /* 无害 */ }
   }
 
-  // ── 覆盖层（Key 输入 / 链接兜底）：原生 DOM，界面样式不依赖 ──
-  function ensureOverlay(titleText, bodyHtml, confirmText) {
+  // ── 覆盖层（Key 输入 / 链接兜底 / 粘贴回调）：原生 DOM，界面样式不依赖 ──
+  // options（可选）：
+  //   cancelText  给了就多渲染一个次要按钮；点它或按 Esc 以 null 收尾 ——
+  //               调用方据此区分「确认」（确认值永远不是 null）与「取消」。
+  //   onMount(body, controls)  卡片挂上 DOM 后回调一次：正文是 HTML 字符串，
+  //               要给它里面的按钮挂监听只有这一次机会；controls.cancel()
+  //               让外部（例如弹窗关闭时的取消通知）也能以取消收尾。
+  //
+  // 带 cancelText 的覆盖层会登记到 activeOverlay：`cancelLogin` 与
+  // `closeWebOverlay` 都要能拿到它（前者让用户点「取消等待」时弹层立刻收尾，
+  // 后者负责在流程结束时摘掉 document 上的 Esc 监听 —— 不摘的话，那个监听
+  // 会在弹层早已消失后继续响应 Esc，把上一轮残留的 Promise 解析掉）。
+  var activeOverlay = null;
+  // 被流程收尾收掉的弹层用这个哨兵值收尾：它既不是用户的输入，也不算取消
+  var DISPOSED = {};
+  function ensureOverlay(titleText, bodyHtml, confirmText, options) {
+    options = options || {};
+    // 先摘掉上一张（可能带着 cancelText 与 document 级 Esc 监听）。
+    // 用 dispose 而不是 cancel：被新弹层替换 ≠ 用户点了取消，不能因此
+    // 把上一轮登录判成取消（典型场景：401 弹出 API Key 框接管了屏幕）。
+    closeWebOverlay(true);
     return new Promise(function (resolve) {
-      var old = document.getElementById('a2a-web-overlay');
-      if (old) old.remove();
       var overlay = document.createElement('div');
       overlay.id = 'a2a-web-overlay';
       overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;'
@@ -125,17 +142,49 @@ pub fn shim_js() -> &'static str {
       card.appendChild(title);
       card.appendChild(body);
       var input = body.querySelector('input');
+      var cancelText = options.cancelText || '';
+      var done = false;
+      var actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;gap:10px;margin-top:14px;';
+      if (cancelText) {
+        var cancelButton = document.createElement('button');
+        cancelButton.textContent = cancelText;
+        cancelButton.style.cssText = 'flex:1;padding:8px 0;border:1px solid #3a3b3f;'
+          + 'border-radius:6px;background:transparent;color:#c9c9c9;font-size:14px;cursor:pointer;';
+        cancelButton.addEventListener('click', function () { finish(null); });
+        actions.appendChild(cancelButton);
+      }
       var button = document.createElement('button');
       button.textContent = confirmText;
-      button.style.cssText = 'margin-top:14px;width:100%;padding:8px 0;border:0;border-radius:6px;'
+      button.style.cssText = 'flex:1;padding:8px 0;border:0;border-radius:6px;'
         + 'background:#4c7dff;color:#fff;font-size:14px;cursor:pointer;';
-      card.appendChild(button);
+      actions.appendChild(button);
+      card.appendChild(actions);
       overlay.appendChild(card);
-      document.body.appendChild(overlay);
-      var finish = function (value) {
-        overlay.remove();
-        resolve(value);
+      // Esc 与取消按钮同义。捕获阶段拦下并 stopPropagation：下层「添加账号」
+      // 弹窗自己也监听 Esc，不拦住会顺带关掉它，再触发一次登录取消。
+      var onKeydown = function (event) {
+        if (event.key !== 'Escape' || !cancelText) return;
+        event.preventDefault();
+        event.stopPropagation();
+        finish(null);
       };
+      // disposeOnly：只摘监听与 DOM，用一个哨兵值让等待方安静退出。
+      // 流程靠自动路径先完成时（pollWait 赢了 Promise.race），残留的这一支
+      // 必须结束 —— 既不能 resolve(null)（会被当成「用户取消」去撤服务端任务），
+      // 也不能永远挂着（那会把整条闭包留在内存里）。
+      var finish = function (value, disposeOnly) {
+        if (done) return;
+        done = true;
+        document.removeEventListener('keydown', onKeydown, true);
+        overlay.remove();
+        if (activeOverlay && activeOverlay.overlay === overlay) activeOverlay = null;
+        resolve(disposeOnly ? DISPOSED : value);
+      };
+      document.body.appendChild(overlay);
+      // 只有带取消按钮的覆盖层才挂 Esc 监听：其余的（API Key 输入、链接兜底）
+      // 不该被 Esc 消掉，也不该在摘除后留下指向已消失弹层的 document 级监听
+      if (cancelText) document.addEventListener('keydown', onKeydown, true);
       button.addEventListener('click', function () { finish(input ? input.value : true); });
       if (input) {
         input.addEventListener('keydown', function (event) {
@@ -143,6 +192,47 @@ pub fn shim_js() -> &'static str {
         });
         setTimeout(function () { input.focus(); }, 60);
       }
+      if (cancelText) {
+        activeOverlay = {
+          overlay: overlay,
+          cancelable: true,
+          cancel: function () { finish(null); },
+          dispose: function () { finish(undefined, true); },
+        };
+      } else {
+        // 不带取消的层也登记：流程收尾时要把「浏览器拦截弹窗」这类提示一起摘掉
+        activeOverlay = {
+          overlay: overlay,
+          cancelable: false,
+          cancel: function () { /* 没有取消语义 */ },
+          dispose: function () { finish(undefined, true); },
+        };
+      }
+      if (options.onMount) {
+        try { options.onMount(body, { cancel: function () { finish(null); } }); }
+        catch (e) { /* 挂监听失败不该挡住弹层 */ }
+      }
+    });
+  }
+
+  /** 复制文本：面板常以局域网 http 访问（非安全上下文），clipboard API 不可用，
+   *  因此保留 textarea + execCommand 的旧路径兜底。 */
+  function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve, reject) {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
+      document.body.appendChild(area);
+      area.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      area.remove();
+      if (ok) resolve();
+      else reject(new Error('复制失败'));
     });
   }
 
@@ -158,6 +248,8 @@ pub fn shim_js() -> &'static str {
         '保存并继续'
       ).then(function (value) {
         askForKey.promise = null;
+        // 被别的弹层接管（见 DISPOSED）：当作没填，避免把这枚哨兵当成 Key 存起来
+        if (value === DISPOSED) return '';
         if (value) storeKey(String(value).trim());
         return value;
       });
@@ -175,7 +267,15 @@ pub fn shim_js() -> &'static str {
     );
   }
 
-  function closeWebOverlay() {
+  // 关掉当前覆盖层。silent=false 时连等待中的 Promise 一起以「取消」收尾 ——
+  // 「取消等待」按钮与关掉添加账号弹窗都走这条；流程正常结束（silent=true）
+  // 时只摘 DOM，不 resolve 成「用户取消」，免得把已经成功的结果改写成取消。
+  function closeWebOverlay(silent) {
+    if (activeOverlay) {
+      if (!silent && activeOverlay.cancelable) activeOverlay.cancel();
+      else activeOverlay.dispose();
+      return;
+    }
     var overlay = document.getElementById('a2a-web-overlay');
     if (overlay) overlay.remove();
   }
@@ -287,18 +387,64 @@ pub fn shim_js() -> &'static str {
     var callbackInstruction = '<strong>如果授权完成后账号没有自动出现</strong>，'
         + '再复制授权页浏览器地址栏中的<strong>完整地址</strong>粘到下面提交；'
         + '不要复制授权页原始地址，也不要改动参数。';
+    var linkStyle = 'flex:1;padding:7px 0;border:1px solid #3a3b3f;border-radius:6px;'
+        + 'background:transparent;color:#c9c9c9;font-size:13px;cursor:pointer;';
     while (true) {
+      // 链接正文每轮重建：CodeArts 第一跳会把 authUrl 换成 portal 的下一跳，
+      // 复用上一轮的 HTML 会让用户看到一个已经作废的地址
+      var authLinkHtml = '<div style="margin-bottom:6px;color:#9a9a9a;">授权页地址</div>'
+          + '<code style="display:block;margin-bottom:8px;padding:8px 10px;border-radius:6px;'
+          + 'background:#26272b;color:#b8c7e6;font-size:12px;line-height:1.5;'
+          + 'word-break:break-all;max-height:96px;overflow:auto;">' + escapeHtml(authUrl) + '</code>'
+          + '<div style="display:flex;gap:8px;margin-bottom:14px;">'
+          + '<button type="button" data-a2a-act="open" style="' + linkStyle + '">打开授权页</button>'
+          + '<button type="button" data-a2a-act="copy" style="' + linkStyle + '">复制链接</button>'
+          + '</div>';
       var callbackUrl = await ensureOverlay(
         label + '需要粘贴回调地址',
         '<div style="margin-bottom:10px;">' + callbackInstruction + '</div>'
-        + '<div style="margin-bottom:10px;">如果授权页没有打开，请先点击：<a href="'
-        + escapeHtml(authUrl) + '" target="_blank" rel="noopener" style="color:#7fa7ff;word-break:break-all;">'
-        + escapeHtml(authUrl) + '</a></div>'
+        + authLinkHtml
         + '<input type="text" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:…/callback?..." '
         + 'style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #3a3b3f;'
         + 'border-radius:6px;background:#26272b;color:#e8e8e8;">',
-        '提交回调地址'
+        '提交回调地址',
+        {
+          cancelText: '取消登录',
+          onMount: function (body) {
+            var openBtn = body.querySelector('[data-a2a-act="open"]');
+            var copyBtn = body.querySelector('[data-a2a-act="copy"]');
+            if (openBtn) {
+              openBtn.addEventListener('click', function () {
+                // noopener：授权页不该拿到面板的 window 引用
+                window.open(authUrl, '_blank', 'noopener');
+              });
+            }
+            if (copyBtn) {
+              copyBtn.addEventListener('click', function () {
+                copyText(authUrl).then(function () {
+                  copyBtn.textContent = '已复制';
+                  setTimeout(function () {
+                    if (copyBtn.isConnected) copyBtn.textContent = '复制链接';
+                  }, 1500);
+                }, function () {
+                  // 非安全上下文且 execCommand 也被禁：退回选中文本让用户手动复制
+                  copyBtn.textContent = '请手动复制上方链接';
+                });
+              });
+            }
+          },
+        }
       );
+      // DISPOSED = 覆盖层被别处接管（例如 401 弹了 API Key 框）：这一轮
+      // 粘贴已经不可能继续，按取消收尾。界面不需要再提示一次 —— 接管屏幕的
+      // 那个弹层（要 Key）本身就是对用户唯一的、更准确的说明。
+      if (callbackUrl === DISPOSED) {
+        var takenOver = canceledError();
+        takenOver.silent = true;
+        throw takenOver;
+      }
+      // null = 用户点了「取消登录」或按了 Esc
+      if (callbackUrl == null) return cancelWebLogin(state);
       callbackUrl = String(callbackUrl || '').trim();
       if (!callbackUrl) continue;
       try {
@@ -316,14 +462,44 @@ pub fn shim_js() -> &'static str {
         // 以 /wait 的最终状态为准，避免把“已收到回调”误报成“已登录”。
         return await pollWait(state);
       } catch (error) {
-        await ensureOverlay(
+        // 取消不是失败：提交后的 pollWait 也会因「取消等待」抛 canceled，
+        // 若不先分流就会弹出一个莫名其妙的「回调提交失败」让用户重填。
+        if (error && error.canceled) throw error;
+        // 提交失败也留着「取消登录」：否则用户只剩「重新填写」一条路，
+        // 想放弃时又得靠刷新页面
+        var retry = await ensureOverlay(
           '回调提交失败',
           '<div style="margin-bottom:4px;">' + escapeHtml(error && error.message ? error.message : error)
           + '</div><div>请确认复制的是授权完成后的完整地址，再重新提交。</div>',
-          '重新填写'
+          '重新填写',
+          { cancelText: '取消登录' }
         );
+        // 覆盖层被别处接管：别再重开粘贴框（否则会在流程结束后留下一层幽灵遮罩）
+        if (retry === DISPOSED) {
+          var retryTakenOver = canceledError();
+          retryTakenOver.silent = true;
+          throw retryTakenOver;
+        }
+        if (retry == null) return cancelWebLogin(state);
       }
     }
+  }
+
+  /** 用户主动取消粘贴回调：通知服务端撤掉这一轮登录任务，并向上抛一个
+   *  可被界面识别为「取消」的结果。
+   *
+   *  为什么要真的打 /cancel：Trae 那条链在网关侧持有回调监听端口，不撤要占满
+   *  5 分钟超时才释放，用户随即重新发起会抢不到端口（与 `LoginService::cancel`
+   *  注释里 AutoClaw / CodeArts 同一个坑）。 */
+  async function cancelWebLogin(state) {
+    var canceled = true;
+    try {
+      var result = await call('POST', '/api/session/login/cancel', { state: state });
+      canceled = !!(result && result.canceled);
+    } catch (error) { /* 任务已自行落定时会 404：当作已取消 */ }
+    var err = new Error(canceled ? '已取消登录等待' : '登录已结束');
+    err.canceled = true;
+    throw err;
   }
 
   // ── 浏览器内核版本（设置页「版本信息」用）────────────────────
@@ -515,7 +691,9 @@ pub fn shim_js() -> &'static str {
   async function pollWait(state) {
     var deadline = Date.now() + 5 * 60 * 1000;
     while (Date.now() < deadline) {
+      if (isFlowCanceled(state)) throw canceledError();
       await sleep(3000);
+      if (isFlowCanceled(state)) throw canceledError();
       var wait = await call('GET', '/api/session/login/wait?state=' + encodeURIComponent(state));
       if (wait && wait.done) {
         if (wait.error) throw new Error(wait.error);
@@ -525,17 +703,41 @@ pub fn shim_js() -> &'static str {
     throw new Error('登录等待超时（5 分钟）');
   }
 
+  /** 取消信号：用 `canceled` 标记与普通失败区分（界面据此提示「已取消」而非报错） */
+  function canceledError(message) {
+    var err = new Error(message || '已取消登录等待');
+    err.canceled = true;
+    return err;
+  }
+
+  /** 当前这一轮登录的 state 与取消标记。只记一轮（壳/桥本身也只允许一轮），
+   *  换了新流程就整体替换 —— 上一轮的迟到轮询凭 state 比对自然失效。 */
+  var currentFlow = null;
+  function isFlowCanceled(state) {
+    return !!(currentFlow && currentFlow.state === state && currentFlow.canceled);
+  }
+
   /** 发起一次登录流程：先开窗口（用户手势还在时占位成功率高），再拿地址导航。 */
   async function runLoginFlow(provider, startRequest) {
     loginActive = true;
     loginProvider = provider;
     emitLogin();
     var popup = null;
+    // state 要等 /start 回来才知道，先把对象挂上 —— 取消可能发生在等待
+    // /start 的那几秒里（此时 currentFlow 已存在，标记能打上）
+    var flow = { state: '', canceled: false };
+    currentFlow = flow;
     try { popup = window.open('about:blank', 'a2a-login'); } catch (e) { /* 拦截时走兜底 */ }
     try {
       var started = await startRequest;
       var authUrl = started && started.authUrl;
       if (!authUrl) throw new Error('网关未返回授权地址');
+      flow.state = String(started.state || '');
+      // 等 /start 的那段时间里用户已经点了取消：state 现在才拿到，补发一次
+      // 撤销请求，别让服务端那轮任务空转到 5 分钟超时（Trae 会占着回调端口）
+      if (flow.canceled) {
+        await cancelWebLogin(flow.state);
+      }
       authUrl = buildRaccoonWebAuthUrl(provider, started.state, authUrl);
       if (popup && !popup.closed) {
         popup.location.href = authUrl;
@@ -556,18 +758,53 @@ pub fn shim_js() -> &'static str {
         // 真回不来的远端场景（浏览器与网关不同机且没有端口映射）照样会弹，
         // 只是晚 10 秒 —— 那时的代价只是多等一会儿，比「让人以为必须手工粘」轻。
         // 两边都保留：先完成的一方结束流程，finally 会关掉残留覆盖层。
-        return await Promise.race([
-          pollWait(started.state),
+        //
+        // 两个分支各自把结果包成 {session} / {error} 再进竞速：落败的那一支
+        // 随后才会被 finally 唤醒（dispose）或被下一拍轮询判成取消，如果让它
+        // 直接 reject，Promise.race 已经 settle，那个 rejection 没人接 ——
+        // 控制台会冒出「Uncaught (in promise)」，用户则以为页面出了错。
+        var outcome = await Promise.race([
+          pollWait(started.state).then(
+            function (session) { return { session: session }; },
+            function (error) { return { error: error }; }
+          ),
           (async function () {
             await sleep(MANUAL_CALLBACK_GRACE_MS);
+            // 窗口期里这一轮已经落定（自动路径成功 / 用户取消 / 用户关了
+            // 添加账号弹窗）：不能再弹粘贴框，否则流程结束后会留下一层
+            // 摘不掉的遮罩（currentFlow 已被 finally 清空）。
+            if (currentFlow !== flow || flow.canceled) throw canceledError();
             return waitForManualCallback(provider, started.state, authUrl);
-          })(),
+          })().then(
+            function (session) { return { session: session }; },
+            function (error) { return { error: error }; }
+          ),
         ]);
+        if (outcome.error) {
+          if (outcome.error.canceled) {
+            // 两种静默来源：外部发起的取消（那边已 toast）、或被其它弹层接管
+            var silent = flow.externalCancel || outcome.error.silent;
+            return silent ? { canceled: true, silent: true } : { canceled: true };
+          }
+          throw outcome.error;
+        }
+        return outcome.session;
       }
       return await pollWait(started.state);
+    } catch (error) {
+      // 用户主动取消 → 返回 {canceled:true}，界面按「已取消」提示而不是报错。
+      // externalCancel：取消由外部（「取消等待」按钮 / 关掉添加账号弹窗）发起，
+      // 那边已经 toast 过一次；error.silent：被别的弹层接管，由那个弹层说明。
+      // 两种情况都带上 silent，让引擎别再重复提示。
+      if (error && error.canceled) {
+        var quiet = flow.externalCancel || error.silent;
+        return quiet ? { canceled: true, silent: true } : { canceled: true };
+      }
+      throw error;
     } finally {
       if (popup && !popup.closed) { try { popup.close(); } catch (e) { /* 无害 */ } }
-      closeWebOverlay();
+      closeWebOverlay(true);
+      if (currentFlow === flow) currentFlow = null;
       loginActive = false;
       loginProvider = '';
       emitLogin();
@@ -949,9 +1186,30 @@ pub fn shim_js() -> &'static str {
       return Promise.resolve({ active: loginActive, provider: loginProvider });
     },
     cancelLogin: async function () {
-      // 桌面壳只记一个活动登录；网页端由本状态机驱动，直接清状态。
-      // 上游任务本身会因无人轮询而在超时后落定，不需要额外请求。
+      // 桌面壳只记一个活动登录；网页端由本状态机驱动。
+      //
+      // 三步缺一不可（早先只做了第一步，于是「取消等待」之后粘贴回调那层
+      // 覆盖层还赖在屏幕上，用户除了刷新页面别无他法）：
+      //   ① 给当前这一轮打取消标记 —— pollWait 下一拍（≤3 秒）就会抛
+      //      canceled，10 秒窗口期那一支也会在计时结束时直接退出；
+      //   ② 收掉覆盖层：有粘贴框时走它的 cancel()，顺带发 /cancel 撤掉
+      //      服务端任务（Trae 的回调端口靠这一步立即释放）；
+      //   ③ 没有覆盖层（还在窗口期里）时自己发一次 /cancel。
+      //
+      // 取消来源在这里统一登记（externalCancel）：界面那一侧在发起取消时
+      // 自己已经 toast 过一次，流程这边不要再重复提示。
       var wasActive = loginActive;
+      var state = currentFlow && currentFlow.state;
+      if (currentFlow) { currentFlow.canceled = true; currentFlow.externalCancel = true; }
+      if (activeOverlay && activeOverlay.cancelable) {
+        // 粘贴框自己会发 /cancel（见 cancelWebLogin），这里不重复发
+        closeWebOverlay();
+      } else {
+        closeWebOverlay(true);
+        if (state) {
+          call('POST', '/api/session/login/cancel', { state: state }).catch(function () {});
+        }
+      }
       loginActive = false;
       loginProvider = '';
       emitLogin();
@@ -961,8 +1219,13 @@ pub fn shim_js() -> &'static str {
       if (!state || !authUrl) return Promise.reject(new Error('缺少授权参数（state / authUrl）'));
       // AutoClaw OAuth 控制器与桌面 bridge 共用 `{ok, session}` 契约。
       // 网页端轮询拿到的是原始 session，直接返回会被前端误判为取消。
+      // 用户取消时 runLoginFlow 给的是 `{canceled:true}`：必须映射成
+      // `ok:false`，否则会被当成「拿到了一份叫 canceled 的 session」。
       return runLoginFlow('autoclaw-intl', Promise.resolve({ state: state, authUrl: authUrl }))
-        .then(function (session) { return { ok: true, session: session }; });
+        .then(function (session) {
+          if (session && session.canceled) return { ok: false, canceled: true };
+          return { ok: true, session: session };
+        });
     },
     getAutoclawOauthCaptchaConfig: function (provider) {
       return call('POST', '/api/session/login/oauth/captcha-config',
