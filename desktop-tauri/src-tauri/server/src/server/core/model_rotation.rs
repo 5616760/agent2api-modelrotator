@@ -28,7 +28,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::http::HeaderMap;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use crate::server::config;
@@ -553,11 +552,6 @@ pub fn status_json() -> Value {
         "enabled": st.config.enabled,
         "groups": groups,
     })
-}
-
-/// 通用：从字节体解析 JSON 对象（与 `http::parse_body` 同语义，供本模块内部用）。
-pub fn parse_json<T: DeserializeOwned>(bytes: &[u8]) -> Option<T> {
-    serde_json::from_slice::<T>(bytes).ok()
 }
 
 #[allow(dead_code)]

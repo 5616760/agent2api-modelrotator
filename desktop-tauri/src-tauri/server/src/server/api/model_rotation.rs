@@ -12,7 +12,7 @@
 //! （转发层每次请求都走 `model_rotation::resolve_for_request`），不重启进程。
 
 use axum::body::Bytes;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::response::Response;
 use serde_json::{json, Value};
 
