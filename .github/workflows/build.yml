@@ -501,7 +501,12 @@ jobs:
           # 先出 Web 产物再同步进原生工程：
           #   tsc --noEmit → vite build --mode apk（产物落 android-www/）
           #   → cap sync android（拷进 app/src/main/assets/public）
-          cd ../..
+          #
+          # ⚠️ 只回一级：当前位置是 desktop-tauri/mobile/android，上一级 mobile
+          # 才是 build:apk 所在的 package。曾写成 `cd ../..`，退到了 desktop-tauri
+          # —— 那个 package.json 没有 build:apk 脚本，CI 报
+          # `npm error Missing script: "build:apk"`（tag v3.2.0-beta.1 首跑即此）。
+          cd ..
           npm run build:apk
           cd android
           ./gradlew assembleRelease --no-daemon
