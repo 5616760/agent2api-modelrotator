@@ -749,6 +749,33 @@ pub fn panel_router(state: ServerState) -> Router {
         //      按 warning 逐条处理遗留的未使用公共设施；
         //   ③ 版本号与 `.zcode/release-notes` 更新（安装包名与 asset 命名约定
         //      要与 update 的 pickInstaller 规则相符：带 setup 的 .exe 优先）。
+        // ── 模型轮换（model-rotator 融合）──
+        // 虚拟模型名 → 真实模型池的轮换 / 失败冷却 / 会话粘性 / 看门狗阈值，
+        // 全部经 /api/model-rotation/* 配置，保存后对下一个请求立即生效（无需重启）。
+        .route(
+            "/api/model-rotation/config",
+            get(api::model_rotation::get_config).put(api::model_rotation::put_config),
+        )
+        .route(
+            "/api/model-rotation/status",
+            get(api::model_rotation::get_status),
+        )
+        .route(
+            "/api/model-rotation/switch",
+            post(api::model_rotation::post_switch),
+        )
+        .route(
+            "/api/model-rotation/refresh",
+            post(api::model_rotation::post_refresh),
+        )
+        .route(
+            "/api/model-rotation/clear-cooldown",
+            post(api::model_rotation::post_clear_cooldown),
+        )
+        .route(
+            "/api/model-rotation/{*rest}",
+            any(api::model_rotation::not_found),
+        )
         .layer(middleware::from_fn(require_api_key));
 
     // 静态托管只在 headless 打开（set_ui_dir）：桌面形态的界面由 Tauri 壳出，

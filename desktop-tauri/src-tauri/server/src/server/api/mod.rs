@@ -130,3 +130,5 @@ pub mod zcode_captcha;
 // 令牌池的**补货节奏**设置（目标 / 轮询间隔 / 单轮上限），见该文件模块头
 pub mod zcode_captcha_pool;
 pub mod zcode_claim;
+/// 模型轮换（model-rotator 融合）管理 API：配置 / 状态 / 手动切换 / 清冷却。
+pub mod model_rotation;

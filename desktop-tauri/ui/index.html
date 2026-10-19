@@ -159,6 +159,11 @@
 
         <div class="nav-group-label" data-i18n="转发能力">转发能力</div>
         <button class="nav-item" data-page="gateway" data-icon="gateway"><span class="ico"></span><span class="label" data-i18n="模型管理">模型管理</span></button>
+        <!-- 模型轮换：把单一虚拟模型名（如 AutoRotate）按时间窗轮换到真实模型池，
+             含失败冷却、窗内会话粘性与看门狗抢答。与「模型管理」同组是因为它决定
+             「一次请求实际打到哪个模型」，是转发能力的一段。整页由原生 JS 面板
+             （model-rotation.js）渲染，对外契约 window.wbModelRotation = { load }。 -->
+        <button class="nav-item" data-page="model-rotation" data-icon="gateway"><span class="ico"></span><span class="label" data-i18n="模型轮换">模型轮换</span></button>
         <!-- Agent：本机 AI 客户端的配置接管（改写它自己的配置文件）。
              夹在「模型管理」与「网络代理」之间是因为三页是同一个转发链的三段：
              模型管理决定「请求发往哪家上游」，网络代理决定「从哪条线路出去」，
@@ -393,6 +398,22 @@
              原样渲染成空容器并同步提交首帧，那个岛在模块加载期就把它接管过去 ——
              别把这一块从岛的树里拿掉。 -->
         <section class="page" data-page="settings"></section>
+
+        <!-- 模型轮换与调度（model-rotator 融合）：配置虚拟模型名 → 真实模型池的
+             时间窗轮换 / 失败冷却 / 会话粘性，并实时展示运行期状态。 -->
+        <section class="page" data-page="model-rotation">
+          <header class="page-head">
+            <h1 data-i18n="模型轮换与调度">模型轮换与调度</h1>
+            <p class="page-sub" data-i18n="把单一虚拟模型名按时间窗轮换到真实模型池：失败冷却 + 窗内会话粘性 + 看门狗抢答">把单一虚拟模型名（如 AutoRotate）按时间窗轮换到真实模型池：失败冷却、窗内会话粘性、看门狗抢答。</p>
+          </header>
+          <div class="page-body">
+            <div id="mr-groups" class="mr-groups"><p class="muted">加载中…</p></div>
+            <aside class="mr-side">
+              <h3 data-i18n="运行期状态">运行期状态</h3>
+              <div id="mr-status" class="mr-status"></div>
+            </aside>
+          </div>
+        </section>
 
         </div>
       </div>

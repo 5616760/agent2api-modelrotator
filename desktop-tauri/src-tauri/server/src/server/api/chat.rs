@@ -121,6 +121,20 @@ pub async fn chat_completions(
     //    请求日志的「下游模型」显示的是客户端发来的名字，不是解析后的。
     //    第三参是这把 Key 的可用模型白名单（None = 不限制）
     let client_model = model_field_text(&payload);
+    // ── 模型轮换（model-rotator 融合）──
+    // 在目录校验 / 别名映射之前拦截：若请求的模型名是某个启用轮换组的虚拟名，
+    // 原地改写为具体模型名，使后续 `pipeline::resolve_model` 的校验作用在真实模型上。
+    if let Some(target) =
+        crate::server::core::model_rotation::resolve_for_request(&mut payload, &headers)
+    {
+        logging::verbose(
+            "[ModelRotation]",
+            &format!(
+                "虚拟模型解析 → provider={} model={}",
+                target.provider, target.model
+            ),
+        );
+    }
     // 下游等级与下游模型名同一时机采集（payload 被就地改写前；改写只动 model，
     // 两边前后一致，见 client_reasoning_of 的说明）
     let client_reasoning = pipeline::client_reasoning_of(&payload);

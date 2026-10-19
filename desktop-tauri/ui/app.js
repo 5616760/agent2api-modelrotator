@@ -129,7 +129,7 @@ function applyZoom(percent) {
 // ─── 页面导航 ────────────────────────────────
 
 const PAGE_KEY = 'workbuddy-desktop-page';
-const PAGES = ['assistant', 'overview', 'accounts', 'checkin', 'gateway', 'agent', 'proxies', 'keys', 'docs', 'logs', 'tasks', 'requests', 'settings'];
+const PAGES = ['assistant', 'overview', 'accounts', 'checkin', 'gateway', 'agent', 'proxies', 'keys', 'docs', 'logs', 'tasks', 'requests', 'settings', 'model-rotation'];
 /** 页签中文名：顶栏面包屑用。overview 的用户可见名是「报表」、gateway 的是「模型管理」
  *  （内部标识保持不变：localStorage 记忆、showPage 与 CSS 的 [data-page] 选择器都依赖它） */
 const PAGE_LABELS = {
@@ -146,6 +146,7 @@ const PAGE_LABELS = {
   tasks: wbI18n.t('定时任务'),
   requests: wbI18n.t('请求日志'),
   settings: wbI18n.t('设置'),
+  'model-rotation': wbI18n.t('模型轮换'),
 };
 
 /** 当前页（子模块据此判断是否需要重新加载） */
@@ -208,6 +209,10 @@ function showPage(name, { persist = true } = {}) {
   // 这里只转发 —— 它自己保证「切页这次刷新一定落地」。
   if (page === 'gateway') {
     void window.wbModelsPanel?.refreshAll?.();
+  }
+  // 模型轮换（model-rotator 融合）设置页：切进去时拉一次配置与实时状态
+  if (page === 'model-rotation') {
+    window.wbModelRotation?.load?.();
   }
   // Agent 页自持客户端清单与配置，切进去时拉一次最新（配置文件可能被
   // 客户端自己改过、也可能刚在别的窗口里被别的工具改过）

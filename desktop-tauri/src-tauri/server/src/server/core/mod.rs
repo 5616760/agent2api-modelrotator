@@ -111,3 +111,5 @@ pub mod update;
 pub mod upstream;
 pub mod usage_query;
 pub mod usage_records;
+/// 模型级轮换（model-rotator 融合）：虚拟模型名 → 真实模型池的时间窗轮换 / 失败冷却 / 会话粘性。
+pub mod model_rotation;
