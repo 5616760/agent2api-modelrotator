@@ -127,6 +127,8 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 
 Em qualquer forma, abra o painel depois (`http://127.0.0.1:3065/`; use o IP do host nas formas servidor e Docker), registre o administrador e crie uma chave na página "Gateway Keys". Teste de conectividade: `curl http://127.0.0.1:3065/health`
 
+**Celular**: abra `http://<IP do gateway>:3065/m` no navegador (dá para "Adicionar à tela inicial" e virar um PWA em tela cheia). Para um ícone próprio, instale o `Agent2API-<versão>.apk` (Android) ou `Agent2API-<versão>.ipa` (iOS, não assinado — reassine você mesmo) do Release. Detalhes: [Instalação e implantação → Celular](install.pt-BR.md#celular).
+
 ## 📸 Capturas de tela
 
 ### Contas

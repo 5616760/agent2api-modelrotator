@@ -7,6 +7,7 @@ import {
   autoCheckEnabled,
   autoCheckIntervalMs,
   canInstallApk,
+  canSelfUpdate,
   cancelDownload,
   checkApkUpdate,
   downloadApk,
@@ -17,14 +18,21 @@ import {
   type ApkUpdateInfo,
   type DownloadProgress,
 } from '../lib/appUpdate'
+import { openExternal } from '../lib/community'
 import { t } from '../i18n'
 
 /**
- * 应用内更新面板（仅 APK）。
+ * 应用内更新面板（Android / iOS 共用，行为按平台分叉）。
  *
  * ── 状态机 ──────────────────────────────────────────────────────
  *   idle → checking → (up-to-date | available) → downloading → downloaded
  * 任一步失败回落到 idle 并给错误提示。
+ *
+ * ── iOS 为什么只有「去下载」 ────────────────────────────────────
+ * 苹果不允许 App 自行下载并安装可执行代码，IPA 只能由系统装（App Store /
+ * TestFlight / 侧载工具）。所以 iOS 上这个面板到「发现新版本」为止，动作
+ * 按钮改成打开 GitHub Release 页面，由用户自己选渠道 —— 不渲染下载进度条
+ * 与「安装」按钮，避免给一个必然失败的承诺。
  *
  * ── 自动检查 ────────────────────────────────────────────────────
  * 挂载时按电脑端配置的间隔轮询检查（间隔读 `/api/scheduled-tasks` 的
@@ -51,8 +59,10 @@ export function AppUpdatePanel() {
   const [auto, setAuto] = useState(autoCheckEnabled)
   /** 自动检查的间隔（0 = 电脑端关了这条任务） */
   const [interval, setIntervalMs] = useState(0)
+  /** 当前壳能不能自装安装包：只有 Android 能（见 lib/appUpdate） */
+  const selfUpdate = canSelfUpdate()
 
-  // 挂载时先看缓存里有没有上次下好的包
+  // 挂载时先看缓存里有没有上次下好的包（iOS 上恒为 false）
   useEffect(() => {
     let cancelled = false
     void hasDownloadedApk().then(result => {
@@ -189,6 +199,16 @@ export function AppUpdatePanel() {
     setBusy(false)
   }
 
+  /**
+   * iOS 的「更新」只能跳转：打开 GitHub Release 页面，由用户自己选渠道
+   * （TestFlight / App Store / 侧载）。`pageUrl` 是网关从 GitHub API 拿到的
+   * release 页面地址，没有它时退回仓库的 releases 列表。
+   */
+  const openReleasePage = () => {
+    const target = info?.pageUrl || 'https://github.com/shadyrispy/Agent2API/releases'
+    openExternal(target)
+  }
+
   const toggleAuto = () => {
     const next = !auto
     setAutoCheckEnabled(next)
@@ -226,15 +246,19 @@ export function AppUpdatePanel() {
                         : t('当前版本 {version}', { version: APP_VERSION })}
             </div>
             <div className='m-t2' style={{ wordBreak: 'break-word' }}>
-              {phase === 'available' && info?.asset
-                ? t('{size} · 下载后可直接安装，无需跳转浏览器', { size: sizeText(info.asset.size) })
-                : phase === 'downloaded'
-                  ? t('安装包已就绪，点「安装」即可完成更新')
-                  : phase === 'downloading' && percent !== null
-                    ? t('已完成 {percent}%', { percent })
+              {phase === 'available' && !selfUpdate
+                ? t('请在 Release 页面下载后通过 TestFlight 或 App Store 安装')
+                : phase === 'available' && info?.asset
+                  ? t('{size} · 下载后可直接安装，无需跳转浏览器', { size: sizeText(info.asset.size) })
+                  : phase === 'downloaded'
+                    ? t('安装包已就绪，点「安装」即可完成更新')
+                    : phase === 'downloading' && percent !== null
+                      ? t('已完成 {percent}%', { percent })
                     : phase === 'latest'
                       ? t('当前版本 {version}', { version: APP_VERSION })
-                      : t('版本 {version} · 从 GitHub 直接下载安装包', { version: APP_VERSION })}
+                      : selfUpdate
+                        ? t('版本 {version} · 从 GitHub 直接下载安装包', { version: APP_VERSION })
+                        : t('版本 {version} · 更新包需从 Release 页面获取', { version: APP_VERSION })}
             </div>
 
             {/* 进度条：总长度未知（percent = null）时不画，只显示已下载量 */}
@@ -282,6 +306,11 @@ export function AppUpdatePanel() {
           ) : phase === 'downloaded' ? (
             <button type='button' className='m-btn m-sm' disabled={busy} onClick={() => void install()}>
               {t('安装')}
+            </button>
+          ) : phase === 'available' && !selfUpdate ? (
+            // iOS：只能跳出去，由系统渠道安装
+            <button type='button' className='m-btn m-sm' onClick={openReleasePage}>
+              {t('去下载')}
             </button>
           ) : phase === 'available' ? (
             <button type='button' className='m-btn m-sm' disabled={busy} onClick={() => void download()}>

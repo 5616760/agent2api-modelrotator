@@ -115,6 +115,7 @@
   "已删除 {n} 个代理": "Deleted {n} proxies",
   "已删除「{name}」": "Deleted \"{name}\"",
   "已删除内核（订阅与账号引用保留，重新下载后会重新分配端口）": "Kernel deleted (subscriptions and account references are kept; ports are reassigned after you download it again)",
+  "已删除内核（订阅与账号引用保留；有文件仍被占用，将在下次启动时清理）": "Kernel deleted (subscriptions and account references are kept; some files are still in use and will be cleaned up on the next launch)",
   "已刷新「{name}」，正在同步节点…": "Refreshed \"{name}\"; syncing nodes…",
   "已同步 {n} 项变更": "",
   "已启用「{name}」": "Enabled \"{name}\"",

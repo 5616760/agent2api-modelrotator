@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Sheet, SheetContent, SheetHeader, SheetBody, SheetTitle, SheetFooter } from '@ui'
 import { apiCall } from '../api/client'
 import { APP_VERSION } from '../lib/appUpdate'
-import { isPackaged } from '../lib/servers'
+import { isPackaged, nativePlatform } from '../lib/servers'
 import { Badge, copyWithToast } from './ui'
 import { Icon } from './Icon'
 import { t } from '../i18n'
@@ -187,14 +187,17 @@ export function SystemInfoSheet({ open, onClose }: { open: boolean; onClose: () 
   const stats = info?.stats || {}
   const deploymentLabel = DEPLOYMENT_LABEL[String(runtime.deployment)] || text(runtime.deployment)
   const osFull = formatOs(runtime.os, runtime.osVersion)
-  // APK 里「本机版本」是包版本；PWA / 浏览器里是构建期注入的界面版本
-  const localLabel = isPackaged() ? t('本机 APK 版本') : t('本机界面版本')
+  // 原生壳里「本机版本」是包版本；PWA / 浏览器里是构建期注入的界面版本
+  const platform = nativePlatform()
+  const localLabel = isPackaged() ? t('本机应用版本') : t('本机界面版本')
+  const formLabel =
+    platform === 'android' ? t('Android 应用（APK）') : platform === 'ios' ? t('iOS 应用') : t('浏览器 / PWA')
 
   const copyAll = () => {
     const lines = [
       `[${t('本机')}]`,
       `${localLabel}: ${APP_VERSION}`,
-      `platform: ${isPackaged() ? 'android-apk' : 'browser'}`,
+      `platform: ${platform === 'android' ? 'android-apk' : platform === 'ios' ? 'ios-ipa' : 'browser'}`,
       '',
       `[${t('网关')}]`,
       `${t('版本')}: ${text(app.version)}`,
@@ -227,7 +230,7 @@ export function SystemInfoSheet({ open, onClose }: { open: boolean; onClose: () 
             <Row label={localLabel} value={`v${APP_VERSION}`} mono />
             <Row
               label={t('运行形态')}
-              value={isPackaged() ? t('Android 应用（APK）') : t('浏览器 / PWA')}
+              value={formLabel}
             />
           </div>
 

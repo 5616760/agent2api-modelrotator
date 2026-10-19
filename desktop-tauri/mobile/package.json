@@ -6,7 +6,9 @@
   "description": "Agent2API 手机端 —— 响应式 Web / PWA，消费 ui-kit（Base UI + Tailwind v4），产物落 ui/m/",
   "scripts": {
     "build": "tsc --noEmit && vite build",
-    "build:apk": "tsc --noEmit && vite build --mode apk && cap sync android",
+    "build:native": "tsc --noEmit && vite build --mode apk",
+    "build:apk": "npm run build:native && cap sync android",
+    "build:ios": "npm run build:native && cap sync ios",
     "watch": "vite build --watch",
     "typecheck": "tsc --noEmit",
     "dev": "vite",
@@ -17,6 +19,8 @@
     "@capacitor/android": "^8.5.3",
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.5.3",
+    "@capacitor/keyboard": "^8.0.6",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

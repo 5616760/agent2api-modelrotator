@@ -127,6 +127,8 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 
 어느 형태든 설치 후 패널(`http://127.0.0.1:3065/`. 서버와 Docker 는 호스트 IP 로 바꿔서)을 열어 관리자 계정을 등록하고, "게이트웨이 키" 페이지에서 키를 만드세요. 연결 확인: `curl http://127.0.0.1:3065/health`
 
+**모바일**: 브라우저에서 `http://<게이트웨이 IP>:3065/m`를 열면 됩니다("홈 화면에 추가"로 전체 화면 PWA 가능). 독립 아이콘이 필요하면 Release의 `Agent2API-<버전>.apk`(Android) 또는 `Agent2API-<버전>.ipa`(iOS, 미서명 — 직접 재서명 필요)를 설치하세요. 자세한 내용: [설치 및 배포 → 모바일](install.ko.md#모바일).
+
 ## 📸 화면 미리보기
 
 ### 계정

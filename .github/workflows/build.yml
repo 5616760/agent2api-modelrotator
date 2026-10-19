@@ -16,16 +16,17 @@ name: build
 #   linux-server    → Linux **服务端**包（无 GUI）→ artifact: linux-server-{amd64,arm64}
 #   windows-server  → Windows **服务端**包（无 GUI）→ artifact: windows-server-amd64
 #   android         → Android APK（Capacitor）   → artifact: android-apk
+#   ios             → iOS IPA（Capacitor）       → artifact: ios-ipa
 #
 # 前三者是「桌面端安装包」（给用户装在自己机器上），中间两者是**服务器形态**：
 # 无图形界面、命令行安装、注册成系统服务（Linux systemd / Windows SCM）。
 # linux-server 的产物同时还是容器内一键更新的载荷。
 #
-# android 是**手机端**：Capacitor 把 `desktop-tauri/mobile` 的界面打进 APK，
-# 与 PWA 形态共用同一份 UI 代码。它的 Web 形态（`ui/m/**`）不需要在这里构建
-# —— 那份产物**入库**，由 frontend-artifacts.yml 校验可复现，桌面端 / 服务端 /
-# Docker 的 `ui/` 静态目录直接带上它，发版流程一行都不用改。这里只补「需要
-# 签名密钥、只能在打包机上出」的 APK 那一半。
+# android / ios 是**手机端**：Capacitor 把 `desktop-tauri/mobile` 的界面打进
+# 安装包，与 PWA 形态共用同一份 UI 代码。它的 Web 形态（`ui/m/**`）不需要在
+# 这里构建 —— 那份产物**入库**，由 frontend-artifacts.yml 校验可复现，桌面端 /
+# 服务端 / Docker 的 `ui/` 静态目录直接带上它，发版流程一行都不用改。这里只补
+# 「需要签名密钥、只能在打包机上出」的那一半。
 #
 # ── 触发方式 ──────────────────────────────────────────────────
 #   · 手动 workflow_dispatch（在 Actions 页面选分支触发）：
@@ -527,5 +528,192 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: android-apk
+          path: dist/*
+          if-no-files-found: error
+
+  # ── iOS IPA（Capacitor）───────────────────────────────────────
+  # 手机端的 iOS 安装包。与 android job 共用同一份 Web 产物
+  # （`npm run build:native` → `android-www/` → `cap sync ios`）。
+  #
+  # ── 为什么必须 macos-26 ──────────────────────────────────────
+  # Capacitor 8 要求 Xcode 26.0+（见官方支持策略），而 Xcode 只能在 macOS 上
+  # 跑。`macos-26` 镜像默认带 Xcode 26.x；`macos-latest` 目前也已迁到 26，
+  # 但显式写死版本号，避免 GitHub 换默认镜像时构建突然失败。
+  #
+  # ── 签名策略：默认出**未签名** IPA ────────────────────────────
+  # 这里不碰 App Store 分发（那需要 Apple Developer Program、证书、描述文件
+  # 与 App Store Connect 凭据，都得用户自己配）。默认产出的是**未签名 .ipa**：
+  # 可以用 AltStore / SideStore / Sideloadly 拿自己的 Apple ID 重签安装。
+  #
+  # 要出已签名包时，在仓库 Secrets 里配齐下面四个，job 会自动改走签名分支：
+  #   IOS_CERTIFICATE_BASE64   .p12 分发证书的 base64
+  #   IOS_CERTIFICATE_PASSWORD .p12 的密码
+  #   IOS_PROVISIONING_PROFILE  .mobileprovision 的 base64
+  #   IOS_TEAM_ID               Apple Developer Team ID
+  # 生成 base64：base64 -i cert.p12 | tr -d '\n'
+  # 缺任何一个都退回未签名包，并在日志里明确说明，不静默产出半成品。
+  #
+  # ── 版本号从哪来 ────────────────────────────────────────────
+  # 与 APK 同源：`desktop-tauri/mobile/package.json` 的 version。
+  # xcodebuild 用 MARKETING_VERSION / CURRENT_PROJECT_VERSION 覆盖 pbxproj 里的
+  # 1.0 / 1，保证与 tag 逐字一致（beta 后缀也能带上）。CFBundleVersion 只允许
+  # 数字与点，所以预发布后缀只进 MARKETING_VERSION，build number 用折算整数。
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装 Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          # 与 android job 同因：mobile 的构建依赖 ui-kit 的源码与样式
+          cache-dependency-path: |
+            desktop-tauri/ui-kit/package-lock.json
+            desktop-tauri/mobile/package-lock.json
+
+      - name: 确认 Xcode 版本
+        run: |
+          xcodebuild -version
+          # Capacitor 8 要求 26.0+；低于这个版本直接失败，不产出装不上的包
+          major="$(xcodebuild -version | head -1 | sed -E 's/Xcode ([0-9]+).*/\1/')"
+          if [ "$major" -lt 26 ]; then
+            echo "::error::需要 Xcode 26.0+（Capacitor 8 的要求），当前是 $major"
+            exit 1
+          fi
+
+      - name: 安装依赖
+        run: |
+          npm --prefix desktop-tauri/ui-kit ci
+          npm --prefix desktop-tauri/mobile ci
+
+      # 先出 Web 产物再同步进原生工程：
+      #   tsc --noEmit → vite build --mode apk（产物落 android-www/）
+      #   → cap sync ios（拷进 ios/App/App/public，并重写 CapApp-SPM/Package.swift）
+      - name: 构建 Web 产物并同步到 iOS 工程
+        run: cd desktop-tauri/mobile && npm run build:ios
+
+      - name: 解析版本号
+        id: version
+        run: |
+          cd desktop-tauri/mobile
+          version="$(node -p "require('./package.json').version")"
+          # 3.1.0-beta.1 → MARKETING_VERSION 保留完整后缀；build number 用三段折算
+          build="$(node -p "
+            const v = require('./package.json').version.split('-')[0].split('.');
+            String(Number(v[0]) * 10000 + Number(v[1]) * 100 + Number(v[2] || 0));
+          ")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "版本: $version / build $build"
+
+      # ── 可选签名：四个 secret 齐了才走 ──────────────────────
+      - name: 还原 iOS 签名材料
+        id: signing
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: |
+          if [ -z "$IOS_CERTIFICATE_BASE64" ] || [ -z "$IOS_CERTIFICATE_PASSWORD" ] \
+             || [ -z "$IOS_PROVISIONING_PROFILE" ] || [ -z "$IOS_TEAM_ID" ]; then
+            echo "::notice::未配置 iOS 签名 secret，产出未签名 IPA（可用 AltStore / SideStore 重签安装）"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # runner 是干净的，导入的证书要有个 keychain 落点
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+
+          echo "$IOS_CERTIFICATE_BASE64" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "$IOS_PROVISIONING_PROFILE" | base64 -d \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
+
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: 构建未签名 Archive
+        run: |
+          cd desktop-tauri/mobile/ios/App
+
+          # CODE_SIGNING_ALLOWED=NO 让 xcodebuild 不去找证书 —— 签名在下一步
+          # 单独处理，这样「有没有配 secret」不会影响这一步能否跑通。
+          xcodebuild \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+          app="$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app"
+          [ -d "$app" ] || { echo "::error::Archive 里没有 App.app"; exit 1; }
+
+      - name: 打包 IPA（签名 / 未签名两条路）
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          app="$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app"
+          mkdir -p dist
+
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            # 已签名：走官方导出流程（会重签并嵌入描述文件）
+            cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>${{ secrets.IOS_TEAM_ID }}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+
+            xcodebuild -exportArchive \
+              -archivePath "$RUNNER_TEMP/App.xcarchive" \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+              -exportPath "$RUNNER_TEMP/export"
+
+            src="$(find "$RUNNER_TEMP/export" -maxdepth 1 -name '*.ipa' | head -1)"
+            [ -n "$src" ] || { echo "::error::导出目录里没有 .ipa"; exit 1; }
+            cp "$src" "dist/Agent2API-$version.ipa"
+            echo "→ 已导出签名 IPA"
+          else
+            # 未签名：手工拼 Payload 结构（AltStore / SideStore 能直接重签这个形态）
+            mkdir -p "$RUNNER_TEMP/Payload"
+            cp -R "$app" "$RUNNER_TEMP/Payload/"
+            ( cd "$RUNNER_TEMP" && zip -qry "$GITHUB_WORKSPACE/dist/Agent2API-$version.ipa" Payload )
+            echo "→ 已打包未签名 IPA"
+          fi
+
+          ( cd dist && shasum -a 256 "Agent2API-$version.ipa" > "Agent2API-$version.ipa.sha256" )
+          ls -lh dist
+          cat "dist/Agent2API-$version.ipa.sha256"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-ipa
           path: dist/*
           if-no-files-found: error

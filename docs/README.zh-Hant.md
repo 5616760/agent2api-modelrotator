@@ -127,6 +127,8 @@ docker run -d --name agent2api --restart unless-stopped -p 3065:3065 -v ./data:/
 
 三種形態裝完後都開啟面板（`http://127.0.0.1:3065/`，伺服器端與 Docker 換成主機 IP）註冊管理員帳號，再在「閘道 Key」頁建一把 Key。連線性自測：`curl http://127.0.0.1:3065/health`
 
+**手機端**：瀏覽器開啟 `http://<閘道IP>:3065/m` 即可（可「加入主畫面」變成全螢幕 PWA）；想要獨立圖示就裝 Release 裡的 `Agent2API-<版本>.apk`（Android）或 `Agent2API-<版本>.ipa`（iOS，未簽名，需自行重簽）。細節見[安裝與部署 → 手機端](install.zh-Hant.md#手機端)。
+
 ## 📸 介面預覽
 
 ### 帳號

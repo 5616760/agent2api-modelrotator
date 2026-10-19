@@ -66,10 +66,10 @@ GitHub 的归属规则只有一条：**提交头里的 author 邮箱出现在某
   3. `desktop-tauri/src-tauri/Cargo.toml`
   4. `desktop-tauri/src-tauri/tauri.conf.json`
   5. `desktop-tauri/src-tauri/server/Cargo.toml`
-  6. `desktop-tauri/mobile/package.json` —— 手机端 APK 的 `versionName` / `versionCode` 由 `android/variables.gradle` 从这个文件读，不改它 APK 就还是旧版本号（`versionCode` 由 semver 折算，只增不减，见该文件的注释）；APK 的产物名 `Agent2API-<版本>.apk` 也取自这里
+  6. `desktop-tauri/mobile/package.json` —— 手机端安装包的版本号都从这里读：Android 的 `versionName` / `versionCode` 由 `android/variables.gradle` 读它（`versionCode` 由 semver 折算，只增不减，见该文件注释）；iOS 的 `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` 由 `build.yml` 的 ios job 读它并传给 xcodebuild。不改它两端的包都还是旧版本号，产物名 `Agent2API-<版本>.apk` / `.ipa` 也取自这里
 - **改完第 6 处，必须顺手把 `desktop-tauri/mobile/package-lock.json` 根部的 `version` 也改成同一个值**（文件顶层的 `"version"` 与 `packages[""].version` 两处）。`npm ci` 对这两处不一致是**静默容忍**的（实测不会报错，也不会自动改），漏改 CI 照绿，但仓库里会留下版本号不一致的 lock 文件，下次谁跑 `npm install` 又会把它改回来，平白多出一个无关 diff。桌面端那几处没有这个问题（`desktop-tauri/package-lock.json` 的版本本来就落后，不随发版改）。
 - 应用内「关于」与更新检查读的是 `env!("CARGO_PKG_VERSION")`（第 5 处），改完跑一次 `cargo check` 让 `Cargo.lock` 跟着刷新。
-- 手机端界面目前**不显示** APK 自身版本号（只显示所连网关的版本）；要核对 APK 版本，看系统「应用信息」页，或直接看 Release 附件名。
+- 手机端界面目前**不显示**包自身版本号（只显示所连网关的版本）；要核对版本，看系统「应用信息」页，或直接看 Release 附件名。
 - **顺手过一遍安装文档**：安装说明已经从 README 搬进 `docs/install.md`（README 只留速查表 + 一个链接），另有 5 份译文 `docs/install.{en,zh-Hant,ja,ko,pt-BR}.md`，六份内容一一对应。凡是这次改动碰到了**安装 / 升级 / 卸载步骤、产物体名、默认端口、环境变量、安装脚本参数**，六份都要同步改；README 速查表受影响时也一起改。
 
 ## 5. 正式版发版流程
@@ -112,7 +112,7 @@ bash scripts/release.sh vX.Y.Z
 
 | 工作流 | 产出 | 说明 |
 |---|---|---|
-| `build.yml`（build） | 桌面端三平台安装包 + 两个服务端包 + Android APK | 六个 job：`macos`（dmg）/ `windows`（NSIS exe）/ `linux-desktop`（deb + AppImage）/ `linux-server`（容器内更新用的 tar.gz）/ `windows-server`（无 GUI 的 zip）/ `android`（APK）。macOS 与 Linux 桌面端的产物**只能在各自平台上构建**，无法从 Windows 交叉编译；所有产物只挂 artifact，GitHub Release 由本地脚本挂载 |
+| `build.yml`（build） | 桌面端三平台安装包 + 两个服务端包 + Android APK + iOS IPA | 七个 job：`macos`（dmg）/ `windows`（NSIS exe）/ `linux-desktop`（deb + AppImage）/ `linux-server`（容器内更新用的 tar.gz）/ `windows-server`（无 GUI 的 zip）/ `android`（APK）/ `ios`（IPA，跑在 `macos-26`）。macOS / iOS 与 Linux 桌面端的产物**只能在各自平台上构建**，无法从 Windows 交叉编译；所有产物只挂 artifact，GitHub Release 由本地脚本挂载 |
 | `docker.yml`（docker） | Docker Hub `aimodcc/agent2api:<版本>` + `:latest`（amd64 / arm64 双架构） | 手动 `workflow_dispatch` 触发时只出 `:dev` 测试 tag，不碰正式 tag；beta tag（版本号带 `-`）只出 `<版本>`，**不移动 `:latest`** |
 
 跟踪进度：
@@ -180,6 +180,7 @@ docker 的 `:latest` 不会被 beta tag 移动（`.github/workflows/docker.yml`�
 - [ ] GitHub Release：`gh release view vX.Y.Z`（手动跑 gh 前先设代理，见第 8 节）—— 正文日志齐全，四个桌面端附件都在：Windows `Agent2API_<版本>_x64-setup.exe`、macOS `Agent2API_<版本>_universal.dmg`、Linux `Agent2API_<版本>_amd64.deb` 与 `Agent2API_<版本>_amd64.AppImage`（另有两个 `agent2api-server-linux-*.tar.gz` + `.sha256`，那是容器内更新包，见第 5 节）；
 - [ ] Linux 桌面端：装 deb（或 `chmod +x` 后跑 AppImage）能启动，且面板「设置 → 软件更新」能检查到版本、给出对应包型的安装入口（deb → 系统安装器，AppImage → 换文件）；
 - [ ] 手机端 APK：Release 里有 `Agent2API-<版本>.apk` 与 `.sha256`；装到 Android 上能启动、添加网关并登录，系统「应用信息」里的版本号与 tag 一致（APK 的 `versionName` 取自 `desktop-tauri/mobile/package.json`，见第 4 节第 6 处）；
+- [ ] 手机端 iOS：Release 里有 `Agent2API-<版本>.ipa` 与 `.sha256`（未签名包需用 AltStore / SideStore 重签；配了 iOS 签名 secret 的仓库出的是已签名包）。CI 的 `ios` job 在 `macos-26` 上跑，日志里能读到 `xcodebuild -version` 与版本号解析结果；
 - [ ] Docker Hub：`aimodcc/agent2api` 的 Tags 页出现 `<版本>` 与 `latest`，Pushed 时间一致；
 - [ ] 安装包「关于」页版本号与 tag 一致；
 - [ ] 安装文档对得上实际产物：`docs/install.md` 与 5 份译文的产物名、端口、命令、环境变量跟这次 Release 一致（README 里那几张速查表同理）；

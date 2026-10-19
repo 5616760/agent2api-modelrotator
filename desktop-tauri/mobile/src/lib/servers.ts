@@ -35,6 +35,28 @@ export function isPackaged(): boolean {
 }
 
 /**
+ * 当前原生平台：`android` / `ios`，浏览器里是 `web`。
+ *
+ * ── 为什么要区分到这一步 ──────────────────────────────────────
+ * 两种壳的「应用内更新」根本不同：
+ *   · Android 能自己下载 APK 并调起安装器（ApkUpdaterPlugin）；
+ *   · iOS 不允许 App 自行安装可执行代码 —— 只能跳到 App Store / TestFlight，
+ *     所以那边不该出现「立即更新」这种下载按钮。
+ * 只用 `isPackaged()` 判断会把 iOS 也当成 APK 形态，点下去只会报
+ * 「当前不是 APK 形态」。
+ */
+export type NativePlatform = 'android' | 'ios' | 'web'
+
+export function nativePlatform(): NativePlatform {
+  if (typeof window === 'undefined') return 'web'
+  const cap = (window as Window & { Capacitor?: { getPlatform?: () => string } }).Capacitor
+  const platform = cap?.getPlatform?.()
+  if (platform === 'android') return 'android'
+  if (platform === 'ios') return 'ios'
+  return 'web'
+}
+
+/**
  * 归一化用户输入的地址。
  *
  * 用户会输 `192.168.1.23`、`192.168.1.23:3065`、`http://192.168.1.23:3065/`、

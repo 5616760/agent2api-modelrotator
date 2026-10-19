@@ -1,7 +1,7 @@
 /**
  * 手机端应用更新。
  *
- * ── 两种形态，两条路 ────────────────────────────────────────────
+ * ── 三种形态，三条路 ────────────────────────────────────────────
  *   · **PWA / 浏览器**：更新走 Service Worker（见 lib/pwa.ts），这里不参与。
  *     浏览器里的「新版本」是网关托管的 `ui/m/*` 变了，刷新即可。
  *   · **APK**：界面打在包里，必须换安装包。这条路是这里实现的：
@@ -10,6 +10,10 @@
  *       3. 调起系统安装器。
  *     下载地址是 GitHub 的 `browser_download_url`，不经过网关中转 ——
  *     手机出不了网时用户自己开代理即可，网关不替它代劳。
+ *   · **iOS（IPA）**：苹果不允许 App 自行下载并安装可执行代码，所以这里
+ *     **只能跳转** —— 拿 `pageUrl` 打开 GitHub Release 页面，由用户自己走
+ *     TestFlight / App Store / AltStore。`downloadApk` / `installApk` 在 iOS
+ *     上直接报错，界面也据此不渲染那几个按钮（见 AppUpdatePanel）。
  *
  * ── 为什么下载走原生而不是 fetch ────────────────────────────────
  * APK 有几十 MB，`fetch` + `blob` 会把整包读进 WebView 内存；`CapacitorHttp`
@@ -19,7 +23,8 @@
  * ── 版本号从哪来 ────────────────────────────────────────────────
  * `__APP_VERSION__` 是构建期由 vite 从 `mobile/package.json` 注入的常量
  * （见 vite.config.ts），与 APK 的 `versionName`（android/variables.gradle
- * 读同一个字段）永远一致。
+ * 读同一个字段）永远一致；iOS 的 `MARKETING_VERSION` 由 CI 从同一个字段写进
+ * xcodebuild 参数，所以两边不会漂。
  *
  * ── 自动检查 ────────────────────────────────────────────────────
  * 间隔与开关**读电脑端的「软件版本检查」任务配置**（`/api/scheduled-tasks`
@@ -29,7 +34,7 @@
  */
 
 import { apiCall } from '../api/client'
-import { isPackaged } from '../lib/servers'
+import { nativePlatform } from '../lib/servers'
 
 /** 构建期注入的本工程版本号 */
 declare const __APP_VERSION__: string
@@ -163,10 +168,16 @@ type CapacitorGlobal = {
 
 /** 取原生插件；不在 APK 里（或插件没注册）时返回 null */
 function plugin(): ApkUpdaterPlugin | null {
-  if (!isPackaged()) return null
+  // iOS 没有这个插件（也不可能有：苹果不允许 App 自装可执行代码）
+  if (nativePlatform() !== 'android') return null
   const capacitor = (window as unknown as { Capacitor?: CapacitorGlobal }).Capacitor
   const found = capacitor?.Plugins?.ApkUpdater
   return (found as ApkUpdaterPlugin | undefined) || null
+}
+
+/** 当前壳能不能在应用内下载并安装安装包（只有 Android 能） */
+export function canSelfUpdate(): boolean {
+  return nativePlatform() === 'android' && plugin() !== null
 }
 
 export type DownloadProgress = {
@@ -187,7 +198,14 @@ export async function downloadApk(
   onProgress?: (progress: DownloadProgress) => void,
 ): Promise<{ path: string; size: number }> {
   const api = plugin()
-  if (!api) throw new Error('当前不是 APK 形态，无法在应用内更新')
+  if (!api) {
+    // iOS 与浏览器都会走到这里：两者都不允许应用内自装安装包
+    throw new Error(
+      nativePlatform() === 'ios'
+        ? 'iOS 不支持应用内安装，请到 GitHub Release 页面下载'
+        : '当前不是 APK 形态，无法在应用内更新',
+    )
+  }
   if (!url) throw new Error('缺少下载地址')
 
   let handle: PluginListenerHandle | null = null
@@ -221,7 +239,13 @@ export async function openInstallPermission(): Promise<void> {
 /** 调起系统安装器（APK 已下载时） */
 export async function installApk(): Promise<void> {
   const api = plugin()
-  if (!api) throw new Error('当前不是 APK 形态，无法安装')
+  if (!api) {
+    throw new Error(
+      nativePlatform() === 'ios'
+        ? 'iOS 不支持应用内安装，请到 GitHub Release 页面下载'
+        : '当前不是 APK 形态，无法安装',
+    )
+  }
   await api.install()
 }
 

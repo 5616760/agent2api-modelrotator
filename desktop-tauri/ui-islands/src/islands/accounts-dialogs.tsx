@@ -1134,7 +1134,7 @@ export function AccountSettingsDialog({ id, onClose }: { id: string; onClose: ()
                   </div>
                   <p className='detail acct-dlg-hint'>
                     {concDefault > 0
-                      ? t('并发上限 受上游硬顶约束，达到上限的账号跳过、请求转给其他账号（原列表 ⋯ 菜单的「并发上限」入口已并入这里）')
+                      ? t('并发上限 填 0 即按本家默认 {default}；填 1 或 2 就按填的算，更大的数会被本家上限截断（原列表 ⋯ 菜单的「并发上限」入口已并入这里）', { default: concDefault })
                       : t('并发上限 0~{max}；达到上限的账号跳过、请求转给其他账号（原列表 ⋯ 菜单的「并发上限」入口已并入这里）', { max: CONC_MAX })}
                   </p>
                 </div>
@@ -1270,9 +1270,9 @@ function BatchDialog({ ids, action, onClose }: { ids: string[]; action: string; 
   const [busy, setBusy] = React.useState(false)
   const [result, setResult] = React.useState<React.ReactNode>('')
   const accounts = ids.map(id => findAccount(id)).filter((account): account is AccountRecord => account !== null)
-  /** 选中的账号里「本家没有『不限』这一档」的硬顶（CodeArts 3，其余 0）：只影响提示
-   *  文案 —— 这些家即使填 0、或填一个比硬顶更小的数，实际并发仍由硬顶决定
-   *  （见 store_util 的 `max_concurrent_public_for`）。空选区取 0 */
+  /** 选中的账号里「本家没有『不限』这一档」的默认并发（CodeArts 3，其余 0）：只影响
+   *  提示文案 —— 这些家填 0 等于按默认并发；填 1 / 2 就按填的算，填更大的数会被
+   *  上游硬顶截断（见 store_util 的 `max_concurrent_public_for`）。空选区取 0 */
   const concHardCap = accounts.reduce(
     (cap, account) => Math.max(cap, Number(providerFeatures(providerOf(account)).concurrencyDefault) || 0),
     0,
@@ -1413,7 +1413,7 @@ const verb = { enable: t('启用'), disable: t('禁用'), proxy: t('修改代理
                 </div>
                 <p className='detail acct-dlg-hint'>
                   {concHardCap > 0
-                    ? t('并发上限 0~{max}；有上游硬顶的家（如 CodeArts）以它的硬顶为准；达到上限的账号会被跳过、请求转给其他账号', { max: CONC_MAX })
+                    ? t('并发上限 0~{max}；CodeArts 等有默认值的家填 0 即按本家默认；达到上限的账号会被跳过、请求转给其他账号', { max: CONC_MAX })
                     : t('并发上限 0~{max}；达到上限的账号会被跳过、请求转给其他账号', { max: CONC_MAX })}
                 </p>
               </div>

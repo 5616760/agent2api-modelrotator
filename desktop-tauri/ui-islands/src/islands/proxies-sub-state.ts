@@ -47,6 +47,16 @@ export type SubscriptionItem = {
 export type KernelStatus = {
   installed: boolean
   version: string
+  /**
+   * 磁盘上实际生效的版本（版本化目录后可能与 pin 的 `version` 不同，
+   * 比如旧布局迁移过来的）；未安装为 null / 缺省。
+   */
+  installedVersion?: string | null
+  /**
+   * 卸载后磁盘上仍有删不掉的文件（已移入回收位，下次启动清理）。界面据此
+   * 说明「已卸载，残留稍后清理」，而不是假装磁盘上什么都没有。
+   */
+  pendingCleanup?: boolean
   asset?: string
   running: boolean
   controllerPort?: number
@@ -617,7 +627,13 @@ export async function removeKernel(): Promise<void> {
     // 「没抛错」就报成功的话，用户会看到「已删除」而内核还好端端在跑
     const finalKernel = state.data?.kernel
     if (finalKernel?.installed === false) {
-      toast(t('已删除内核（订阅与账号引用保留，重新下载后会重新分配端口）'))
+      // 卸载已降级：指针一摘就算卸载成功，磁盘上可能还剩删不掉的文件
+      // （内核进程占着 exe）。残留会在下次启动时清理，如实说一句
+      if (finalKernel.pendingCleanup) {
+        toast(t('已删除内核（订阅与账号引用保留；有文件仍被占用，将在下次启动时清理）'))
+      } else {
+        toast(t('已删除内核（订阅与账号引用保留，重新下载后会重新分配端口）'))
+      }
       refreshPool()
     } else {
       const reason =

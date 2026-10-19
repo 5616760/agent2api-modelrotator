@@ -112,6 +112,7 @@
   "已删除 {n} 个代理": "{n} proxies excluídos",
   "已删除「{name}」": "“{name}” excluído",
   "已删除内核（订阅与账号引用保留，重新下载后会重新分配端口）": "Kernel excluído (as assinaturas e as referências das contas são mantidas; as portas são redistribuídas depois de baixar novamente)",
+  "已删除内核（订阅与账号引用保留；有文件仍被占用，将在下次启动时清理）": "Kernel excluído (as assinaturas e as referências de conta são mantidas; alguns arquivos ainda estão em uso e serão limpos na próxima inicialização)",
   "已刷新「{name}」，正在同步节点…": "\"{name}\" atualizada; sincronizando nós…",
   "已同步 {n} 项变更": "",
   "已启用「{name}」": "“{name}” habilitado",

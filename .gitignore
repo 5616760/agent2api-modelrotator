@@ -63,3 +63,12 @@ desktop-tauri/mobile/android/keystore.properties
 
 # 本地测试跑出来的运行数据（数据库、加密密钥、日志）
 .agenttest2/
+
+# ── iOS（Capacitor）────────────────────────────────────────────
+# ios/ 是 `npx cap add ios` 生成的原生工程，需要入库：
+# Info.plist（ATS / 本地网络用途）、AppIcon、Splash 都是手改过的，
+# 重新生成会丢。
+# 构建机本地状态与生成物不入库（ios/.gitignore 已覆盖大部分，这里补两条
+# 全局的，避免换机器时把 Xcode 的派生数据带进来）：
+desktop-tauri/mobile/ios/App/build/
+desktop-tauri/mobile/ios/DerivedData/
