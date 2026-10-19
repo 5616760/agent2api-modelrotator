@@ -31,7 +31,7 @@
 //!     HTTP 回调 —— 前提是浏览器以回环地址访问面板（上游白名单只收
 //!     http://127.0.0.1 / localhost / [::1] + 显式端口，见
 //!     `raccoonCallbackOriginProblem`），不满足时发起前就弹指引拦下；
-//!     Trae / Accio / CodeArts：网页端自动提供“粘贴回调地址”兜底。
+//!     Trae / Accio / CodeArts / Antigravity：网页端自动提供“粘贴回调地址”兜底。
 //!
 //! ── 壳特有命令的降级 ────────────────────────────────────────
 //! 窗口主题、托盘、改端口、软件更新安装、桌面设置、文件对话框导入导出
@@ -295,7 +295,16 @@ pub fn shim_js() -> &'static str {
       // LobsterAI 同属这一型：授权页完成后 302 回
       // `http://127.0.0.1:<网关端口>/auth/callback`，在 Docker 面板里那个
       // 地址属于浏览器所在电脑、回不到容器，只能让用户把最终 URL 粘回来。
-      || provider === 'lobsterai';
+      || provider === 'lobsterai'
+      // Antigravity 也是这一型：它的 `redirect_uri` 由网关拼成
+      // `http://localhost:<网关端口>/oauth-callback`（Google 的 desktop 型
+      // client 只收 loopback，见 `providers/antigravity/oauth.rs`）。桌面端
+      // 浏览器与网关同机，一跳就回来；服务器 / Docker 部署时那个 localhost
+      // 属于浏览器所在电脑，回调永远到不了网关 —— 用户只能把地址栏整条 URL
+      // 粘回弹窗，由后端 `submit_login_callback` 的 Antigravity 分支换码。
+      // 粘贴不要求该地址可达：换码回传的 `redirect_uri` 与发起授权时同源
+      // （都取自 `login_redirect_uri`），天然逐字一致。
+      || provider === 'antigravity';
   }
 
   function escapeHtml(value) {
@@ -383,6 +392,7 @@ pub fn shim_js() -> &'static str {
       : provider === 'codearts' ? 'CodeArts'
       : provider === 'autoclaw-intl' ? 'AutoClaw 国际版'
       : provider === 'lobsterai' ? 'LobsterAI（有道龙虾）'
+      : provider === 'antigravity' ? 'Antigravity'
       : provider;
     var callbackInstruction = '<strong>如果授权完成后账号没有自动出现</strong>，'
         + '再复制授权页浏览器地址栏中的<strong>完整地址</strong>粘到下面提交；'
@@ -460,7 +470,7 @@ pub fn shim_js() -> &'static str {
         }
         // Trae 是把 query 注入现有 listener 后异步换证；其它几家也统一
         // 以 /wait 的最终状态为准，避免把“已收到回调”误报成“已登录”。
-        return await pollWait(state);
+        return await pollWait(state, provider);
       } catch (error) {
         // 取消不是失败：提交后的 pollWait 也会因「取消等待」抛 canceled，
         // 若不先分流就会弹出一个莫名其妙的「回调提交失败」让用户重填。
@@ -688,7 +698,15 @@ pub fn shim_js() -> &'static str {
 
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
-  async function pollWait(state) {
+  // 超时文案必须给出下一步。对走 loopback 回调的几家来说，最常见的原因不是
+  // 「忘了授权」，而是浏览器与网关不在同一台机器上（服务器 / Docker 部署）：
+  // 回环地址属于用户本机，回调永远到不了网关，只能把地址栏整条 URL 粘回来。
+  // 只说「等待超时」，用户不知道该干什么。
+  var MANUAL_CALLBACK_TIMEOUT_HINT = '：如果浏览器与网关不在同一台机器上，'
+    + '授权完成后的回调会落到你本机而不是网关 —— 请复制浏览器地址栏里的'
+    + '完整回调地址，粘回面板重试。';
+
+  async function pollWait(state, provider) {
     var deadline = Date.now() + 5 * 60 * 1000;
     while (Date.now() < deadline) {
       if (isFlowCanceled(state)) throw canceledError();
@@ -700,7 +718,8 @@ pub fn shim_js() -> &'static str {
         return wait.session == null ? {} : wait.session;
       }
     }
-    throw new Error('登录等待超时（5 分钟）');
+    var hint = provider && needsManualCallback(provider) ? MANUAL_CALLBACK_TIMEOUT_HINT : '';
+    throw new Error('登录等待超时（5 分钟）' + hint);
   }
 
   /** 取消信号：用 `canceled` 标记与普通失败区分（界面据此提示「已取消」而非报错） */
@@ -764,7 +783,7 @@ pub fn shim_js() -> &'static str {
         // 直接 reject，Promise.race 已经 settle，那个 rejection 没人接 ——
         // 控制台会冒出「Uncaught (in promise)」，用户则以为页面出了错。
         var outcome = await Promise.race([
-          pollWait(started.state).then(
+          pollWait(started.state, provider).then(
             function (session) { return { session: session }; },
             function (error) { return { error: error }; }
           ),
@@ -790,7 +809,7 @@ pub fn shim_js() -> &'static str {
         }
         return outcome.session;
       }
-      return await pollWait(started.state);
+      return await pollWait(started.state, provider);
     } catch (error) {
       // 用户主动取消 → 返回 {canceled:true}，界面按「已取消」提示而不是报错。
       // externalCancel：取消由外部（「取消等待」按钮 / 关掉添加账号弹窗）发起，
