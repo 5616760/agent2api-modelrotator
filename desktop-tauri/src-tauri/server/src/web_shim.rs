@@ -624,13 +624,7 @@ pub fn shim_js() -> &'static str {
 
   /** 网页端的「文件对话框」：拉成 Blob 触发浏览器下载 */
   async function downloadFile(method, path, filename) {
-    var headers = { 'Accept': '*/*' };
-    if (apiKey) headers['x-api-key'] = apiKey;
-    var panelAccess = storedPanelToken('access');
-    if (panelAccess) {
-      headers['x-panel-token'] = panelAccess;
-      headers['Authorization'] = 'Bearer ' + panelAccess;
-    }
+    var headers = authHeaders({ 'Accept': '*/*' });
     var response = await fetch(path, { method: method, headers: headers });
     if (!response.ok) throw new Error('导出失败（HTTP ' + response.status + '）');
     var blob = await response.blob();
@@ -649,6 +643,13 @@ pub fn shim_js() -> &'static str {
         blob = new Blob([JSON.stringify(body.data, null, 2)], { type: 'application/json' });
       }
     } catch (e) { /* 非 JSON 响应（日志下载）按原文保存 */ }
+    saveBlob(blob, filename);
+    summary.saved = true;
+    return summary;
+  }
+
+  /** 浏览器落盘：Blob → 临时 object URL → 隐藏的 <a download> */
+  function saveBlob(blob, filename) {
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
     link.href = url;
@@ -657,8 +658,123 @@ pub fn shim_js() -> &'static str {
     link.click();
     link.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
-    summary.saved = true;
-    return summary;
+  }
+
+  /** 面板 / API Key 的请求头（下载、上传这类非 JSON 请求共用） */
+  function authHeaders(extra) {
+    var headers = extra || {};
+    if (apiKey) headers['x-api-key'] = apiKey;
+    var panelAccess = storedPanelToken('access');
+    if (panelAccess) {
+      headers['x-panel-token'] = panelAccess;
+      headers['Authorization'] = 'Bearer ' + panelAccess;
+    }
+    return headers;
+  }
+
+  /**
+   * 非 JSON 请求（整库下载 / 上传）的鉴权重试，401 分流与 `httpCall` 同一口径：
+   * panel_login_required → 静默续期，其余 → 弹 Key 框。
+   *
+   * `buildInit` 是工厂而不是现成对象：续期后令牌已经换了，重试必须重新取头。
+   * 401 的响应体很小（错误 JSON），`clone()` 读它不影响后续正常路径。
+   */
+  async function fetchAuthed(path, buildInit, retried) {
+    var response = await fetch(path, buildInit());
+    if (response.status !== 401 || retried) return response;
+    var probe = null;
+    try { probe = JSON.parse(await response.clone().text()); } catch (e) { /* 非 JSON */ }
+    var errorType = probe && probe.error && probe.error.type;
+    if (errorType === 'panel_login_required') {
+      var refreshed = await tryRefresh();
+      if (refreshed) return fetchAuthed(path, buildInit, true);
+      clearPanelAuth();
+      window.location.href = '/login';
+      return new Promise(function () {});
+    }
+    var key = await askForKey();
+    if (!key) return response;
+    storeKey(key);
+    return fetchAuthed(path, buildInit, true);
+  }
+
+  /**
+   * 整库备份（网页端）：`GET /api/backup/download` → 浏览器下载 .sql。
+   *
+   * 返回形状与桌面壳 `commands.rs::export_database` 对齐
+   * （`{ bytes, tables, file }`），设置页的成功提示两端共用一套渲染。
+   * 表计数在后端放进 `X-Backup-Tables` 响应头 —— 响应体是几百 MB 的 SQL，
+   * 不能为了带元数据把它包成 JSON。
+   */
+  async function exportDatabase(includeLogs) {
+    var path = '/api/backup/download?includeLogs=' + (includeLogs === false ? '0' : '1');
+    var response = await fetchAuthed(path, function () {
+      return { method: 'GET', headers: authHeaders({ 'Accept': '*/*' }) };
+    });
+    if (!response.ok) {
+      // 失败时响应体是管理信封（错误文案在里面），交给统一的错误归一
+      var failure = null;
+      try { failure = JSON.parse(await response.text()); } catch (e) { /* 非 JSON */ }
+      var detail = failure && failure.error != null ? failure.error : ('HTTP ' + response.status);
+      throw asError(typeof detail === 'string' ? detail : (detail && detail.message) || '导出失败');
+    }
+    var tables = [];
+    try { tables = JSON.parse(response.headers.get('x-backup-tables') || '[]'); } catch (e) { tables = []; }
+    var filename = fileNameFromDisposition(response.headers.get('content-disposition'))
+      || ('agent2api-backup-' + downloadStamp() + '.sql');
+    var blob = await response.blob();
+    saveBlob(blob, filename);
+    return { bytes: blob.size, tables: tables, file: filename, saved: true };
+  }
+
+  /**
+   * 整库恢复（网页端）：选一个 .sql 文件 → `POST /api/backup/upload`。
+   *
+   * 请求体直接放 File 对象，浏览器按文件流式发送 —— 不能 `file.text()`：
+   * 几百 MB 的备份在手机上会先把整份内容读成字符串，内存翻倍且容易 OOM。
+   * 返回形状与桌面壳 `commands.rs::import_database` 一致
+   * （`{ tables, safetyBackup, warning? }`）。
+   */
+  async function importDatabase() {
+    var picked = await pickFile('.sql');
+    if (picked.canceled) return { canceled: true };
+    var file = picked.file;
+    var response = await fetchAuthed('/api/backup/upload', function () {
+      return {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/sql', 'Accept': 'application/json' }),
+        body: file,
+      };
+    });
+    var text = await response.text();
+    var payload = null;
+    try { payload = JSON.parse(text); } catch (e) { /* 非 JSON（如代理层 413） */ }
+    var ok = response.status >= 200 && response.status < 300;
+    var success = payload && typeof payload.success === 'boolean' ? payload.success : undefined;
+    if (!ok || success === false) {
+      if (response.status === 413) {
+        throw new Error('备份文件超过 2GB 上限，请改用精简导出（不含日志）后重试');
+      }
+      var detail = payload && payload.error != null ? payload.error : ('HTTP ' + response.status);
+      throw asError(typeof detail === 'string' ? detail : (detail && detail.message) || '恢复失败');
+    }
+    return payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload;
+  }
+
+  /** `Content-Disposition` 里的 filename（取不到就返回空串，由调用方兜底） */
+  function fileNameFromDisposition(value) {
+    if (!value) return '';
+    var match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(value);
+    if (!match) return '';
+    try { return decodeURIComponent(match[1]); } catch (e) { return match[1]; }
+  }
+
+  /** 下载文件名的时间戳（与后端 `backup_api::file_stamp` 同形，本地时间） */
+  function downloadStamp() {
+    var now = new Date();
+    function pad(value) { return (value < 10 ? '0' : '') + value; }
+    return String(now.getFullYear()) + pad(now.getMonth() + 1) + pad(now.getDate())
+      + '-' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
   }
 
   /** 壳命令的总入口（同时接住 UI 里两处直接的 internals.invoke('api_request')） */
@@ -675,7 +791,7 @@ pub fn shim_js() -> &'static str {
   }
 
   /**
-   * 网页端的「导入账号」：浏览器没有原生文件对话框，用 <input type=file> 顶替。
+   * 网页端的「打开文件」：浏览器没有原生文件对话框，用 <input type=file> 顶替。
    *
    * 移动端的三处坑（都踩过，改动时别退回去）：
    *   · 输入框**不能** `display:none` —— iOS Safari 会忽略对隐藏 file input 的
@@ -686,13 +802,15 @@ pub fn shim_js() -> &'static str {
    *   · `accept` 只写扩展名：Android 各家文件管理器对 MIME 形（application/json）
    *     支持不一，带上它反而可能把 .json 过滤掉。
    *
+   * 只负责「选到文件」，读内容与解析交给调用方 —— 整库恢复要求请求体直接放
+   * File（流式上传），账号导入要读成文本解析，两者的后续步骤没有交集。
    * 解析口径与桌面壳 `commands.rs::import_accounts` 对齐，见 buildImportPayload。
    */
-  function importAccountsViaFile() {
+  function pickFile(accept) {
     return new Promise(function (resolve, reject) {
       var input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.json';
+      input.accept = accept;
       input.setAttribute('aria-hidden', 'true');
       input.tabIndex = -1;
       // 视觉隐藏而非 display:none（理由见上）
@@ -735,24 +853,9 @@ pub fn shim_js() -> &'static str {
         var file = input.files && input.files[0];
         if (!file) { settleCancel(); return; }
         picked = true;          // 同步置位：兜底那条链不再当取消
+        settled = true;
         cleanup();
-        file.text().then(function (text) {
-          var payload;
-          try {
-            payload = buildImportPayload(JSON.parse(text));
-          } catch (error) {
-            settled = true;
-            reject(asError(error));
-            return;
-          }
-          call('POST', '/api/accounts/import', payload).then(
-            function (result) { settled = true; resolve(result); },
-            function (error) { settled = true; reject(asError(error)); }
-          );
-        }, function (error) {
-          settled = true;
-          reject(asError(error));
-        });
+        resolve({ canceled: false, file: file });
       });
 
       document.body.appendChild(input);
@@ -760,6 +863,20 @@ pub fn shim_js() -> &'static str {
       document.addEventListener('visibilitychange', onVisibility);
       input.click();
     });
+  }
+
+  /** 网页端的「导入账号」：选 .json → 解析 → `POST /api/accounts/import` */
+  async function importAccountsViaFile() {
+    var picked = await pickFile('.json');
+    if (picked.canceled) return { canceled: true };
+    var text = await picked.file.text();
+    var payload;
+    try {
+      payload = buildImportPayload(JSON.parse(text));
+    } catch (error) {
+      throw asError(error);
+    }
+    return call('POST', '/api/accounts/import', payload);
   }
 
   /**
@@ -1480,6 +1597,14 @@ pub fn shim_js() -> &'static str {
     },
     exportAccounts: function () { return invokeShell('export_accounts'); },
     importAccounts: function () { return invokeShell('import_accounts'); },
+
+    // ── 整库备份 / 恢复 ──
+    // 桌面壳走系统文件对话框（bridge.rs 的 exportDatabase / importDatabase），
+    // 网页端只能「下载附件」与「上传文件」，对应后端新加的一对 HTTP 端点
+    // （见 api::backup_api 的模块头）。返回形状与桌面壳逐字段一致，设置页
+    // 的提示文案与结果区两端共用。
+    exportDatabase: function (includeLogs) { return exportDatabase(includeLogs); },
+    importDatabase: function () { return importDatabase(); },
   };
 
   // 把筛选条件转成查询串（与桌面 bridge 的 toQuery 同语义：空值跳过）

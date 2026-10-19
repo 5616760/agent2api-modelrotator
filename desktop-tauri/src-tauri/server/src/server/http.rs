@@ -365,6 +365,18 @@ pub fn panel_router(state: ServerState) -> Router {
         // （大文件不过 HTTP，见 api::backup_api 的模块头）。
         .route("/api/backup/export", post(api::backup_api::export_backup))
         .route("/api/backup/import", post(api::backup_api::import_backup))
+        // 网页端（含 Docker / LAN 面板）的两条：浏览器只能下载附件、上传文件，
+        // 内容因此必须过 HTTP。upload 单独放宽请求体上限 —— 管理面外层是
+        // 32MB，整库备份动辄上百 MB；这一层比外层更靠近处理函数，按 axum 的
+        // 扩展覆盖规则（内层后写胜出）生效，见 `gateway_router` 里同一套说明。
+        .route("/api/backup/download", get(api::backup_api::download_backup))
+        .merge(
+            Router::new()
+                .route("/api/backup/upload", post(api::backup_api::upload_backup))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    api::backup_api::MAX_BACKUP_UPLOAD,
+                )),
+        )
         // ── 云同步（设置页「数据 → 云同步」）──
         // 挂 protected：上传把全部账号密文与网关 Key 送到远端，下载整体替换
         // 本机业务数据，保存写入远端凭据 —— 三者都是 /api/config 级别敏感。

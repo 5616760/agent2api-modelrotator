@@ -816,8 +816,8 @@ export function toggleDbIncludeLogs(on: boolean): void {
 }
 
 /**
- * 整库备份：后端把整库导出为 SQL 文件直写到壳选的路径（文件不过壳中转）。
- * 桌面端专属（web shim 没有这个方法），导出没有「空库不导」分支。
+ * 整库备份：桌面端由后端直写到壳选的路径（文件不过壳中转），网页端由浏览器
+ * 下载附件（见 web_shim.rs），两侧返回值同形。导出没有「空库不导」分支。
  */
 export async function exportDatabase(): Promise<void> {
   if (busyScope) return
@@ -825,7 +825,7 @@ export async function exportDatabase(): Promise<void> {
   try {
     const api = shared().workbuddyDesktop
     if (!api?.exportDatabase) {
-      toast(t('当前环境不支持整库备份（仅桌面端可用）'), 'err')
+      toast(t('当前环境不支持整库备份'), 'err')
       return
     }
     const result = await api.exportDatabase(snapshot.dbIncludeLogs)
@@ -866,7 +866,7 @@ async function proceedDbRestore(): Promise<void> {
   if (busyScope) return
   const api = shared().workbuddyDesktop
   if (!api?.importDatabase) {
-    toast(t('当前环境不支持整库恢复（仅桌面端可用）'), 'err')
+    toast(t('当前环境不支持整库恢复'), 'err')
     return
   }
   beginBusy('dbImport')
@@ -874,6 +874,9 @@ async function proceedDbRestore(): Promise<void> {
   publish({ dbWarning: null })
   try {
     const result = await api.importDatabase()
+    // 取消（桌面壳的文件框 / 网页端的文件选择器都回 {canceled:true}）：
+    // 不是失败也不是「恢复了 0 张表」，静默收场即可
+    if (result?.canceled) { toast(t('已取消恢复')); return }
     const tables = Array.isArray(result?.tables) ? result.tables.length : 0
     const note = result?.safetyBackup
       ? t('，替换前的数据已备份为 {name}', { name: result.safetyBackup })

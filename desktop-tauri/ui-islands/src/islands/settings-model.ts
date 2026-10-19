@@ -32,6 +32,8 @@ export type DatabaseExportResult = {
 }
 
 export type DatabaseImportResult = {
+  /** 用户在文件框里点了取消（桌面壳 / 网页端选文件都可能是这个出口） */
+  canceled?: boolean
   /** 恢复后的各表行数 */
   tables?: DatabaseTableStat[]
   /** 替换前自动建的安全备份文件名（{config_dir}/backups/ 下） */

@@ -1753,8 +1753,6 @@ function storageBadge(state: StorageState): React.ReactNode {
 function DataPane({ snap }: { snap: SettingsSnapshot }) {
   const io = snap.busy
   const storage = snap.storage
-  // 端别取自桥（platform）：整库备份 / 恢复的文件对话框只有桌面壳有
-  const isWebBridge = shared().workbuddyDesktop?.platform === 'web'
   // 库打不开时各计数都是后端回落出来的 0，与「真的没有数据」在数字上无法区分 ——
   // 整排显示「—」，不误导用户以为数据丢了；路径仍然照显（文件位置是已知的）
   const ready = storage.status === 'ready'
@@ -1770,65 +1768,65 @@ function DataPane({ snap }: { snap: SettingsSnapshot }) {
           云同步更常用，放上面。 */}
       <CloudSyncPanel />
 
-      {/* 整库备份 / 恢复：仅桌面端渲染（web shim 没有这两个桥方法）。
+      {/* 整库备份 / 恢复：桌面端与网页端（含 Docker）都渲染 —— 桌面壳走系统
+          文件对话框，网页端走浏览器下载 / 上传，桥两侧的返回值同形（见
+          web_shim.rs 的 exportDatabase / importDatabase）。
           排在「账号导入 / 导出」之前 —— 恢复是整库替换，两种语义别让用户混着看 */}
-      {!isWebBridge && (
-        <section className='panel'>
-          <PanelHead
-            title={t('整库备份 / 恢复')}
-            tip={TIPS.backup}
-            actions={
-              <>
-                <Button
-                  id='btn-settings-db-export'
-                  variant='outline'
-                  disabled={io === 'dbExport' || io === 'dbImport'}
-                  onClick={() => void exportDatabase()}
-                >
-                  {io === 'dbExport' ? t('备份中…') : t('备份整库')}
-                </Button>
-                <Button
-                  id='btn-settings-db-restore'
-                  variant='destructive'
-                  disabled={io === 'dbExport' || io === 'dbImport'}
-                  onClick={() => confirmDbRestore()}
-                >
-                  {io === 'dbImport' ? t('恢复中…') : t('恢复整库')}
-                </Button>
-              </>
-            }
-          />
-          <div className='panel-body'>
-            {/* 恢复后的密钥警告（后端 warning 原文，密钥对不上时导入后账号解不开）：
-                排在面板最前 —— 用户刚点完标题栏的「恢复整库」，视线就在这片区域，
-                这条警告必须第一眼看到；而且它**常驻**，不像 toast 那样几秒后消失。
-                呈现沿用本页既有的 .danger-zone 警示框（与下面那条备份说明同款），
-                不自造组件；文案是服务端生成的数据，原样显示、不翻译 */}
-            {snap.dbWarning ? (
-              <div className='danger-zone' id='settings-db-warning'>
-                <strong>{t('⚠️ 密钥警告')}</strong>
-                <br />
-                {snap.dbWarning}
-              </div>
-            ) : null}
-            <div className='retention-row'>
-              <label htmlFor='settings-db-include-logs'>{t('包含日志与调试报文')}</label>
-              <Switch
-                id='settings-db-include-logs'
-                checked={snap.dbIncludeLogs}
-                disabled={io !== null}
-                onCheckedChange={toggleDbIncludeLogs}
-              />
-              <div className='hint'>
-                {t('取消勾选后只备份业务数据（账号、配置与余额记录），文件显著变小；事件日志、请求统计与调试报文不会进备份文件。')}
-              </div>
+      <section className='panel'>
+        <PanelHead
+          title={t('整库备份 / 恢复')}
+          tip={TIPS.backup}
+          actions={
+            <>
+              <Button
+                id='btn-settings-db-export'
+                variant='outline'
+                disabled={io === 'dbExport' || io === 'dbImport'}
+                onClick={() => void exportDatabase()}
+              >
+                {io === 'dbExport' ? t('备份中…') : t('备份整库')}
+              </Button>
+              <Button
+                id='btn-settings-db-restore'
+                variant='destructive'
+                disabled={io === 'dbExport' || io === 'dbImport'}
+                onClick={() => confirmDbRestore()}
+              >
+                {io === 'dbImport' ? t('恢复中…') : t('恢复整库')}
+              </Button>
+            </>
+          }
+        />
+        <div className='panel-body'>
+          {/* 恢复后的密钥警告（后端 warning 原文，密钥对不上时导入后账号解不开）：
+              排在面板最前 —— 用户刚点完标题栏的「恢复整库」，视线就在这片区域，
+              这条警告必须第一眼看到；而且它**常驻**，不像 toast 那样几秒后消失。
+              呈现沿用本页既有的 .danger-zone 警示框（与下面那条备份说明同款），
+              不自造组件；文案是服务端生成的数据，原样显示、不翻译 */}
+          {snap.dbWarning ? (
+            <div className='danger-zone' id='settings-db-warning'>
+              <strong>{t('⚠️ 密钥警告')}</strong>
+              <br />
+              {snap.dbWarning}
             </div>
-            <div className='danger-zone'>
-              <strong>{NOTES.backupDanger}</strong>
+          ) : null}
+          <div className='retention-row'>
+            <label htmlFor='settings-db-include-logs'>{t('包含日志与调试报文')}</label>
+            <Switch
+              id='settings-db-include-logs'
+              checked={snap.dbIncludeLogs}
+              disabled={io !== null}
+              onCheckedChange={toggleDbIncludeLogs}
+            />
+            <div className='hint'>
+              {t('取消勾选后只备份业务数据（账号、配置与余额记录），文件显著变小；事件日志、请求统计与调试报文不会进备份文件。')}
             </div>
           </div>
-        </section>
-      )}
+          <div className='danger-zone'>
+            <strong>{NOTES.backupDanger}</strong>
+          </div>
+        </div>
+      </section>
 
       <section className='panel'>
         <PanelHead
