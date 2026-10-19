@@ -415,6 +415,27 @@ impl ServerState {
         // 订阅内核（mihomo sidecar）的命令 worker：单条队列串行消费内核操作
         // （下载 / 重建配置 / 重启 / 停止），见 `core::sub_kernel` 的模块头。
         core::sub_kernel::spawn_worker();
+        // 启动时清一次孤儿订阅节点：正常路径下内核同步会摘掉它们，但内核未安装 /
+        // 手动关闭期间删掉的订阅没有人来收（旧版本还可能因为缺这一步留下历史
+        // 遗留）。清理放在内核启动之前 —— 它不依赖内核，读到什么就按什么清。
+        // 读订阅失败时 `live_ids` 返回 Err，这里整段跳过（宁可留着也不误删）。
+        match core::subscriptions::live_ids() {
+            Ok(live) => match core::proxy_pool::prune_orphan_subscription_items(&live) {
+                Ok(changes) if changes > 0 => logging::console_line(
+                    "[Subscription]",
+                    &format!("已清理 {changes} 个不属于任何订阅的节点"),
+                ),
+                Ok(_) => {}
+                Err(error) => logging::console_line(
+                    "[Subscription]",
+                    &format!("清理孤儿订阅节点失败: {error}"),
+                ),
+            },
+            Err(error) => logging::console_line(
+                "[Subscription]",
+                &format!("跳过孤儿节点清理（{error}）"),
+            ),
+        }
         // 内核已安装且有启用的订阅 → 自动拉起（清理上次运行遗留的进程后
         // 重建配置）。**未安装时不自动下载**：二进制 ~20-40MB，下载必须有
         // 用户的手势（界面上的「下载内核」按钮），启动时静默拉网不合适。

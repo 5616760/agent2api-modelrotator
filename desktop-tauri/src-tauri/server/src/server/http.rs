@@ -359,6 +359,17 @@ pub fn panel_router(state: ServerState) -> Router {
         // 全部业务表（账号、日志、统计、配置），与 /api/config 同级敏感。
         .route("/api/upgrade", get(api::upgrade_api::get_upgrade))
         .route("/api/upgrade/run", post(api::upgrade_api::run_upgrade))
+        // ── 面板账户（设置页「账户」）──
+        // 改密码要求旧密码并撤销其他会话；账号信息只回用户名与启用状态。
+        // 两者都挂 protected：必须先登录（或带 Key）才谈得上「改自己的密码」。
+        .route(
+            "/api/panel/account",
+            get(api::panel::panel_account),
+        )
+        .route(
+            "/api/panel/change-password",
+            post(api::panel::panel_change_password),
+        )
         // ── 整库备份 / 恢复（设置页，SQL 文本形态）──
         // 挂 protected：导出把全部凭证写进指定路径，导入整体替换数据库，
         // 都是 /api/config 级别敏感；文件由后端按壳选的路径直读直写

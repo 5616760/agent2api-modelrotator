@@ -21,6 +21,27 @@ import { t } from '../i18n'
 
 // ── 从 HEAD 恢复的类型（桥成员的返回形状）──────────────
 
+/** 机器人校验状态（`/api/captcha`）：两端各一个开关 + 本进程形态 */
+export type CaptchaSetting = {
+  captchaDesktop?: boolean
+  captchaWeb?: boolean
+  /** true = 本进程是桌面壳；false = headless（Docker / 服务端） */
+  localPanel?: boolean
+}
+
+/** 写入机器人校验：两个字段都可选，缺省的那一端不改 */
+export type CaptchaPatch = {
+  captchaDesktop?: boolean
+  captchaWeb?: boolean
+}
+
+/** 面板账户信息（`/api/panel/account`） */
+export type PanelAccount = {
+  registered?: boolean
+  username?: string
+  loginEnabled?: boolean
+}
+
 export type DatabaseTableStat = { table?: string; rows?: number }
 
 /** 整库导出结果（壳命令 export_database） */
@@ -300,9 +321,17 @@ export type SettingsBridge = {
   getPrompt(): Promise<unknown>
   savePrompt(payload: PromptPatch): Promise<unknown>
   getStorage(): Promise<unknown>
-  getCaptchaSetting(): Promise<{ captchaEnabled?: boolean } | null | undefined>
-  saveCaptchaSetting(on: boolean): Promise<{ captchaEnabled?: boolean } | null | undefined>
+  getCaptchaSetting(): Promise<CaptchaSetting | null | undefined>
+  saveCaptchaSetting(patch: CaptchaPatch): Promise<CaptchaSetting | null | undefined>
+  /** 面板账户信息（设置页「账户」分类）；未注册时 registered=false */
+  getPanelAccount(): Promise<PanelAccount | null | undefined>
+  /** 改密码：要求旧密码；成功后后端撤销其他会话链，本会话保留 */
+  changePanelPassword(oldPassword: string, newPassword: string): Promise<unknown>
   panelLogout(): Promise<unknown>
+  /** 面板会话状态（桌面壳的登录通道）；网页端由 shim 以 cookie 状态回答 */
+  panelSessionStatus?(): Promise<{ registered?: boolean; authenticated?: boolean } | null | undefined>
+  /** 清除本机的面板会话令牌（登出时与 panelLogout 配套） */
+  panelSessionClear?(): Promise<unknown>
   /** 后端就绪状态（局域网地址展示要拼网关端口；其余字段本页不消费） */
   getBackendStatus?(): Promise<{ port?: number } | null | undefined>
   // ── 局域网访问（仅桌面端渲染，web 端 shim 不提供这几个方法）──
@@ -440,6 +469,9 @@ export const CATEGORIES = [
   { id: 'retry', label: t('重试'), icon: 'refresh' },
   { id: 'timeout', label: t('超时'), icon: 'timer' },
   { id: 'security', label: t('安全'), icon: 'shield' },
+  // 账户：管理员用户名 / 改密码 / 两端的人机验证开关 / 重置说明。
+  // 紧跟「安全」放 —— 同为「谁能进管理面」这一层语义。
+  { id: 'account', label: t('账户'), icon: 'accounts' },
   { id: 'data', label: t('数据'), icon: 'database' },
   { id: 'feedback', label: t('反馈与需求'), icon: 'feedback' },
   // 「版本信息」：软件版本 / 运行环境 / 路径 / 开关状态 / 关键计数，可一键
@@ -807,6 +839,7 @@ export const TIPS = {
   units: t('控制报表与请求日志里 Token 读数的写法：开启后按中文量级显示（1.2亿 / 8400万），关闭则用 k / M / B 缩写（与上游文档、接口字段的写法一致）。这只影响显示口径，不改变任何统计与存储的数值。'),
   queue: t('只对「排队制」的上游生效（目前是 Qoder 的免费模型）：模型繁忙时上游不报错，只回一句「建议 N 秒后再来」（业务码 10605），网关按建议时长等一会儿再发同一请求，等满次数仍排不上才把「排队中」作为错误返回（HTTP 503，文案会说明这不是登录态或额度问题）。等待发生在首个字节之前，吃的是「等待响应超时」那份预算 —— 两项设置一起决定一次请求最多卡多久；排队不会标记账号限额、也不会换账号（换谁都一样在排队）。保存后对下一个请求立即生效，不用重启。'),
   captchaPool: t('ZCode「套餐池（Start Plan）」通道的每条推理请求都要附一个当次铸造的阿里云无痕验证令牌（一次性、约 2 分钟过期）：令牌由界面里的铸造守卫静默铸好、推给网关入池，转发时逐条取用。这里的三个值管的是补货节奏：①「库存目标」= 库存低于它守卫才补铸、补到它为止，默认 3 个；②「轮询间隔」= 守卫多久看一次库存，默认 2500 毫秒，只影响反应速度（库存够用时不会多铸）；③「单轮铸造上限」= 发现缺货时一轮最多铸几个，默认 1 个（连铸之间固定隔 500 毫秒）。请求密集、请求日志里连续出现「需要人机验证令牌」的 503 时，把目标与单轮上限适当调大、轮询调快，能让池子跟得上消耗 —— 代价是上游（阿里云）对铸造频率有风控，铸得越多越快越容易触发限流，且用不掉的令牌 2 分钟即过期作废、等于白烧配额，所以建议小步调。保存后对下一轮补货立即生效，不用重启。'),
+  captchaSides: t('两张开关分别管桌面端（应用内窗口，也包含开启局域网访问后从其他设备访问的那份面板）与网页端（Docker / 服务端自托管的浏览器面板）。默认都开启；桌面端只在本机使用、嫌验证耗时可以关掉，网页端暴露在网络上，建议保持开启。'),
   timeouts: t('上游请求四个阶段各自的等待上限（秒，1~3600）：①「连接中超时」= 建立 TCP/TLS 连接或代理隧道的最大等待，默认 30 秒；②「等待响应超时」= 请求发出后等上游响应头的最大时间，默认 300 秒 —— 网关请求上游恒带 stream，响应头在 SSE 建立时就到达，与模型思考多久无关；③「流式响应空闲超时」= 流式响应相邻两块数据之间允许的最大空闲，收到新数据即重新计时，默认 300 秒 —— 上游长时间不吐数据即判定连接僵死并断开；④「非流式响应超时」= 读完整份非流式响应体的总预算（一次性计时、不重置），默认 300 秒。四项都是「等待上限」，只要数据还在来，正常的流式回答就一直往下传。保存后对下一个请求立即生效，不用重启。'),
   retry: t('请求转发到上游失败时（服务器瞬时错误、连接失败，以及 WorkBuddy 的 11-128 敏感词拦截），网关会等一段间隔后再发一次。次数分两档，管的是两件事：①「同一账号重试次数」在同一账号上原地重发几次 —— 一般是提示词被上游拦截、或链路瞬时抖动，等一会儿重发往往就好了；②「切换账号重试次数」这份请求最多再换几个账号试 —— 首发的那个账号不算，每换一个扣一次，不分是不是同一家（换到同一家的下一个账号也算一次），换满还失败就把错误返回给客户端。两项都设为 0 表示失败不重试、直接报错。注意账号级限额（429）不占这里的换号次数 —— 那类失败走「冷却该账号并换下一个账号」的降级，与这里的重试是两条路。另有「指定错误码直接换号」名单（默认 402）：命中名单的上游状态码不在同一账号重发，直接按队列换下一个账号继续试（换号也占「切换账号重试次数」），换满仍失败才把错误返回给客户端。'),
   routing: t('转发一个请求时按什么顺序挑账号：①「路由策略」决定排队规则 —— 顺序优先是排第 1 的接走所有请求、直到它不能答（限流 / 故障 / 额度尽）才轮到下一位；负载均衡是每条请求换下一位，把负载摊到各个账号上。②「会话粘性」让同一会话（相同的模型 + 相同的开头消息）尽量跟住同一个账号 —— 多轮对话的上下文缓存能复用、少换号少浪费；自动档粘 5 分钟、会话内档粘 6 小时、每轮与关闭都不粘。账号的排队位次（账号表的第一列）在所有策略下都是地基，策略在它之上再排。此外路由还有三层自愈保护：转发失败的账号退避休息一会儿（15 分钟起步翻倍、封顶 1 小时）、被 429 的账号垫底排到队尾 30 分钟、余额不足 / Token 周期用量到顶的账号由限制器拦下 —— 前两层可以在下面按需开关，限制器由账号的「限制器」设置管。'),
@@ -847,7 +880,7 @@ export const NOTES = {
   storageFile: t('配置目录下的 agent2api.db（账号、日志、请求记录、调试报文与设置都在里面）。'),
   storageSize: t('库主文件的大小（不含运行期间的 WAL 临时文件，退出时已自动并回）。'),
   storage: t('数据统一保存在配置目录下的 agent2api.db；如需更换位置，请设置环境变量 AGENT2API_PROXY_HOME 后重启程序。'),
-  captcha: t('开启后，登录页在浏览器后台自动完成验证（对真人无感），而脚本每次尝试都要先算一道题 —— 暴力破解与抢注的成本显著上升。仅影响面板的登录 / 注册，与 API 客户端的 API Key 无关。'),
+  captcha: t('开启后，登录页在浏览器后台自动完成验证（对真人无感），而脚本每次尝试都要先算一道题 —— 暴力破解与抢注的成本显著上升。仅影响面板的登录 / 注册，与 API 客户端的 API Key 无关。桌面端与网页端各自独立：桌面端主要服务本机与局域网，网页端（Docker / 服务端）直接暴露在网络上的登录页风险更高，建议保持开启。'),
   panelLogin: t('当前浏览器以管理员身份登录着本面板。「退出登录」会撤销这台设备的登录会话（30 天内的自动续期一并失效），需要重新输入账号密码；其他已登录的设备不受影响。'),
   exportDanger: t('导出文件内含 accessToken / refreshToken / apiKey 等凭证与自定义提供商定义，可直接用于登录。请妥善保管，不要外传或上传到公共位置。'),
   backupDanger: t('备份文件内含全部账号凭证、网关 API Key 与面板管理员凭据，可直接用于登录。请妥善保管，不要外传或上传到公共位置。'),

@@ -54,6 +54,7 @@ import {
   shared,
   toast,
   type AppSettings,
+  type CaptchaSetting,
   type ClineHeadersData,
   type GatewayBlocks,
   type ModelsDevState,
@@ -277,7 +278,27 @@ export type SettingsSnapshot = {
   cors: CorsState
   prompt: PromptState
   storage: StorageState
-  captcha: { available: boolean; enabled: boolean }
+  /**
+   * 机器人校验（ALTCHA）：两端各一个开关，`localPanel` 标出本进程是哪一端
+   * （桌面壳 true / 网页端 false），界面据此把「正在用的这一端」标出来。
+   *
+   * `available = false` 表示读不到后端状态（端点不可用），两张开关都置灰 ——
+   * 与 retention / cors 的降级口径一致。
+   */
+  captcha: { available: boolean; desktop: boolean; web: boolean; localPanel: boolean }
+  /**
+   * 面板账户（设置页「账户」分类）。
+   *
+   * `registered = false` 表示这台机器还没注册管理员 —— 此时面板不需要登录，
+   * 界面照常可用，只是没有「改密码」可改。`username` 只用于展示。
+   */
+  account: {
+    status: 'loading' | 'ready' | 'unavailable'
+    registered: boolean
+    username: string
+    /** 改密码弹窗（非空 = 开着；busy 时按钮转圈，error 非空显示红字） */
+    password: { busy: boolean; error: string } | null
+  }
   /**
    * models.dev 模型元数据（能力位与逐模型思考档位）。
    *
@@ -382,7 +403,8 @@ const INITIAL: SettingsSnapshot = {
     dailyDays: null,
     debug: null,
   },
-  captcha: { available: true, enabled: false },
+  captcha: { available: true, desktop: false, web: false, localPanel: false },
+  account: { status: 'loading', registered: false, username: '', password: null },
   modelsDev: { status: 'loading', enabled: true, source: '', updatedAt: 0, count: 0 },
   ioFailure: null,
   retentionConfirm: null,
@@ -1553,32 +1575,116 @@ export async function saveCors(next: boolean): Promise<void> {
   }
 }
 
-/* ─── 机器人校验（面板登录 / 注册的 ALTCHA 开关）── */
+/* ─── 机器人校验（面板登录 / 注册的 ALTCHA 开关，分两端）── */
+
+/** 把 `/api/captcha` 的响应折成快照（读与写后的回读共用一份解析） */
+function captchaState(state: CaptchaSetting | null | undefined): SettingsSnapshot['captcha'] {
+  if (!state || typeof state !== 'object') {
+    return { available: false, desktop: false, web: false, localPanel: false }
+  }
+  return {
+    available: true,
+    desktop: state.captchaDesktop === true,
+    web: state.captchaWeb === true,
+    localPanel: state.localPanel === true,
+  }
+}
 
 async function loadCaptcha(): Promise<void> {
   try {
     const state = await shared().workbuddyDesktop?.getCaptchaSetting()
-    publish({ captcha: { available: true, enabled: state?.captchaEnabled === true } })
+    publish({ captcha: captchaState(state) })
   } catch (error) {
     // 读失败降级禁用开关（照 retention 的模式）
-    publish({ captcha: { available: false, enabled: false } })
+    publish({ captcha: captchaState(null) })
     console.warn('读取机器人校验设置失败:', errorMessage(error))
   }
 }
 
-export async function saveCaptcha(next: boolean): Promise<void> {
+/** 拨动某一端的开关（`side` 决定写哪个字段，另一端原样不动） */
+export async function saveCaptcha(side: 'desktop' | 'web', next: boolean): Promise<void> {
   if (busyScope) { repaint(); return }
   beginBusy('captcha')
-  publish({ captcha: { ...snapshot.captcha, enabled: next } })
+  // 乐观更新：只改拨动的那一端
+  publish({ captcha: { ...snapshot.captcha, [side]: next } })
+  const label = side === 'desktop' ? t('桌面端') : t('网页端')
   try {
-    const state = await shared().workbuddyDesktop?.saveCaptchaSetting(next)
-    publish({ captcha: { available: true, enabled: state?.captchaEnabled === true } })
-    toast(next ? t('✅ 机器人校验已开启') : t('⚠️ 机器人校验已关闭'))
+    const state = await shared().workbuddyDesktop?.saveCaptchaSetting(
+      side === 'desktop' ? { captchaDesktop: next } : { captchaWeb: next },
+    )
+    publish({ captcha: captchaState(state) })
+    toast(next ? t('✅ 已开启「{label}」的机器人校验', { label }) : t('⚠️ 已关闭「{label}」的机器人校验', { label }))
   } catch (error) {
     toast(t('保存失败：{message}', { message: errorMessage(error) }), 'err')
     await loadCaptcha()
   } finally {
     endBusy()
+  }
+}
+
+/* ─── 面板账户（设置页「账户」分类）── */
+
+async function loadAccount(): Promise<void> {
+  try {
+    const state = await shared().workbuddyDesktop?.getPanelAccount()
+    publish({
+      account: {
+        status: 'ready',
+        registered: state?.registered === true,
+        username: typeof state?.username === 'string' ? state.username : '',
+        password: snapshot.account.password,
+      },
+    })
+  } catch (error) {
+    publish({ account: { ...snapshot.account, status: 'unavailable' } })
+    console.warn('读取面板账户失败:', errorMessage(error))
+  }
+}
+
+/** 打开改密码弹窗（表单值由弹窗自己持有，这里只管开关与忙碌态） */
+export function openPasswordDialog(): void {
+  if (!snapshot.account.registered) return
+  publish({ account: { ...snapshot.account, password: { busy: false, error: '' } } })
+}
+
+/** 关闭改密码弹窗（忙碌中不允许关 —— 请求还在路上，关掉就看不到结果） */
+export function closePasswordDialog(): void {
+  if (snapshot.account.password?.busy) return
+  publish({ account: { ...snapshot.account, password: null } })
+}
+
+/**
+ * 提交改密码。校验口径与后端一致（新密码至少 8 位、不能与旧密码相同），
+ * 前端先挡一道只是为了少一次往返；真正的判据在 `panel_change_password`。
+ */
+export async function submitPasswordChange(oldPassword: string, newPassword: string): Promise<void> {
+  const current = snapshot.account.password
+  if (!current || current.busy) return
+  if (!oldPassword) {
+    publish({ account: { ...snapshot.account, password: { busy: false, error: t('请输入当前密码') } } })
+    return
+  }
+  if (newPassword.length < 8) {
+    publish({ account: { ...snapshot.account, password: { busy: false, error: t('新密码至少 8 位') } } })
+    return
+  }
+  if (newPassword === oldPassword) {
+    publish({ account: { ...snapshot.account, password: { busy: false, error: t('新密码不能与当前密码相同') } } })
+    return
+  }
+  publish({ account: { ...snapshot.account, password: { busy: true, error: '' } } })
+  try {
+    await shared().workbuddyDesktop?.changePanelPassword(oldPassword, newPassword)
+    // 其他会话已被后端撤销，本机这条仍然有效 —— 关掉弹窗、提示即可
+    publish({ account: { ...snapshot.account, password: null } })
+    toast(t('✅ 密码已修改，其他设备的登录已失效'))
+  } catch (error) {
+    publish({
+      account: {
+        ...snapshot.account,
+        password: { busy: false, error: errorMessage(error) },
+      },
+    })
   }
 }
 
@@ -2131,7 +2237,14 @@ async function loadStorage(): Promise<void> {
 export async function panelLogout(): Promise<boolean> {
   try {
     await shared().workbuddyDesktop?.panelLogout()
-    window.location.href = '/login'
+    // 桌面壳里壳自己也存着一份令牌（panel_session），必须一并清掉 ——
+    // 只撤销服务端会话而不清本地，下次启动壳仍会拿着死令牌去试，
+    // 表现为「每次开机都要多绕一次登录页」。
+    await shared().workbuddyDesktop?.panelSessionClear?.()
+    // 桌面窗口的页面来自 tauri://，站内路径 `/login` 不存在（那是 headless
+    // 静态托管的路径）。两种形态各回各的登录页。
+    const desktop = shared().workbuddyDesktop?.platform !== 'web'
+    window.location.href = desktop ? 'login.html' : '/login'
     return true
   } catch (error) {
     toast(t('退出失败：{message}', { message: errorMessage(error) }), 'err')
@@ -2166,6 +2279,7 @@ export async function load(): Promise<void> {
     loadPrompt(),
     loadStorage(),
     loadCaptcha(),
+    loadAccount(),
     loadModelsDev(),
     // 软件更新面板是另一个岛（update-panel.tsx），切进设置页时让它自己刷新一次
     shared().wbUpdatePanel?.load?.(),

@@ -275,6 +275,63 @@ pub async fn panel_register(username: String, password: String) -> Result<Value,
     }
 }
 
+// ── 面板登录（桌面壳的会话通道）──────────────────────────────
+//
+// ── 为什么桌面端也需要这套东西 ──────────────────────────────
+// 桌面窗口加载 `tauri://localhost`，网关在 `127.0.0.1:{port}`：跨源，登录响应
+// 的 HttpOnly cookie 到不了网关。所以桌面形态走网页端「中转模式」的同一条
+// 通道 —— 令牌进响应体、之后每个请求带 `x-panel-token` 头（实现见
+// `panel_session`）。这组命令只做三件事：查状态、存令牌、清令牌。
+//
+// 什么时候需要登录由 `admin_registered()` 决定：没注册过管理员时面板免鉴权
+// （桌面端「当正常软件用」的默认形态），注册过就必须登录 —— 注册本身发生在
+// 「开启局域网访问」的流程里，或用户主动从登录页注册。
+
+/// 当前面板会话状态（窗口启动时、以及每次从登录页回来时查询）。
+///
+/// 返回 `{ registered, authenticated }`：
+///   · `registered = false` → 不需要登录，直接进主界面；
+///   · `registered = true && authenticated = false` → 窗口应加载登录页；
+///   · 两者都 true → 直接进主界面。
+///
+/// `authenticated` 的判断方式是**真的打一次 `/api/session`**：本地有没有令牌
+/// 不代表它还有效（可能过期、可能被改密码撤销），只有服务端说了才算。这里
+/// 顺带触发 `gateway::call` 的自动续期 —— access 过期但 refresh 还活着时，
+/// 这一次探测就会把新令牌换回来，用户完全无感。
+#[tauri::command]
+pub async fn panel_session_status() -> Result<Value, String> {
+    let registered = crate::server::access::admin_registered();
+    if !registered {
+        return Ok(json!({ "registered": false, "authenticated": false }));
+    }
+    let authenticated = crate::gateway::call("GET", "/api/session", None)
+        .await
+        .is_ok();
+    Ok(json!({ "registered": true, "authenticated": authenticated }))
+}
+
+/// 保存登录页交来的令牌（登录 / 注册成功后由页面调用）。
+///
+/// 令牌加密后写进桌面设置（见 `panel_session`），壳随后每个管理请求自动带上。
+#[tauri::command]
+pub fn panel_session_store(access_token: String, refresh_token: String) -> Result<Value, String> {
+    if access_token.is_empty() || refresh_token.is_empty() {
+        return Err("令牌为空".to_string());
+    }
+    crate::panel_session::store(&access_token, &refresh_token)?;
+    Ok(json!({ "saved": true }))
+}
+
+/// 清除本机的面板会话（登出 / 会话失效后由界面调用）。
+///
+/// 只清**本机**这份令牌；服务端那条会话链由界面另行调用 `/api/panel/logout`
+/// 撤销（那条请求会带上下面的令牌，所以必须在清之前发）。
+#[tauri::command]
+pub fn panel_session_clear() -> Result<Value, String> {
+    crate::panel_session::clear();
+    Ok(json!({ "cleared": true }))
+}
+
 /// 切换局域网访问：校验 →（需要时补首把 Key）→ 写设置 → 重启应用。
 ///
 /// ── 开启前必须有面板管理员 ──────────────────────────────────

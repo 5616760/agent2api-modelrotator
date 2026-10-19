@@ -709,6 +709,26 @@ const BRIDGE_JS: &str = r#"
     getCors: () => call('GET', '/api/cors'),
     saveCors: enabled => call('PUT', '/api/cors', { corsEnabled: enabled === true }),
 
+    // ── 机器人校验（两端各一个开关）与面板账户（设置页「账户」分类）──
+    // 与 web_shim.rs 的同名方法逐字同形。此前这组只存在于网页桥：桌面端
+    // 读不到 `getCaptchaSetting`，设置页那张开关一直是置灰的（这也是它后来
+    // 从「安全」搬到「账户」的原因之一）。
+    getCaptchaSetting: () => call('GET', '/api/captcha'),
+    // patch 是 `{captchaDesktop?, captchaWeb?}`（部分更新）；旧签名传布尔值时
+    // 视为「两端一起改」，兼容还没刷新的界面缓存（旧 islands/ui.js）。
+    saveCaptchaSetting: patch =>
+      call(
+        'PUT',
+        '/api/captcha',
+        typeof patch === 'boolean' ? { captchaEnabled: patch } : (patch || {}),
+      ),
+    getPanelAccount: () => call('GET', '/api/panel/account'),
+    changePanelPassword: (oldPassword, newPassword) =>
+      call('POST', '/api/panel/change-password', {
+        oldPassword: String(oldPassword || ''),
+        newPassword: String(newPassword || ''),
+      }),
+
     // ── models.dev 模型元数据（能力位与逐模型思考档位）──
     // 与 web_shim.rs 的同名方法逐字同形（桌面壳走 Tauri IPC，网页端走同源
     // fetch，两边接口名与签名必须一致 —— 漏一侧的症状见上面 getCors 那段）。
@@ -867,6 +887,16 @@ const BRIDGE_JS: &str = r#"
         username: String(username || '').trim(),
         password: String(password || ''),
       }),
+    // ── 面板会话（桌面端的登录通道，见 panel_session 模块头）──
+    // 窗口启动时查一次：未注册管理员 → 免登录直进主界面；注册过且当前没有
+    // 有效会话 → 加载登录页。登录页把拿到的令牌交给 panelSessionStore。
+    panelSessionStatus: () => invoke('panel_session_status'),
+    panelSessionStore: (accessToken, refreshToken) =>
+      invoke('panel_session_store', {
+        accessToken: String(accessToken || ''),
+        refreshToken: String(refreshToken || ''),
+      }),
+    panelSessionClear: () => invoke('panel_session_clear'),
     changeLanAccess: (enabled, panel) =>
       invoke('change_lan_access', { enabled: enabled === true, panel: panel === true }),
     localIp: () => invoke('local_ip'),

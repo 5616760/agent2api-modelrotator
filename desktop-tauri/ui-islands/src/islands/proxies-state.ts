@@ -97,6 +97,8 @@ export type ProxyClashSnapshot = {
 export type ProxyPoolPayload = {
   items?: ProxyPoolItem[]
   clash?: ProxyClashSnapshot
+  /** 内核装没装（见 accounts-shared 的 portlessSubscriptionLabel） */
+  kernelInstalled?: boolean
   /** 删除响应里带被删条目的名称（toast 文案用） */
   removed?: string
   /** 同步响应里的本次变更数（「同步 Clash Verge」按钮要报「更新了几项」） */
@@ -422,7 +424,9 @@ export function accept(payload: ProxyPoolPayload | null | undefined): void {
   const alive = new Set(payload.items.map(item => item.id))
   const selected = new Set([...state.selected].filter(id => alive.has(id)))
   patch({ data: payload, error: '', selected })
-  acceptProxyPool(payload.items)
+  // 内核安装状态一起写进共享缓存：账号页下拉与这一页的地址列都按它区分
+  // 「未被使用」与「内核未安装」（见 accounts-shared 的 portlessSubscriptionLabel）
+  acceptProxyPool(payload.items, payload.kernelInstalled)
 }
 
 /* ─── 取数与单条动作 ─────────────────────────── */

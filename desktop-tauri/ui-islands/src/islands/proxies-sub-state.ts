@@ -586,7 +586,7 @@ export async function stopKernel(): Promise<void> {
  * ── 为什么带一段轮询 ───────────────────────────────────────
  * 命令是异步的（走内核 worker 的串行队列），投出去那一刻返回的快照还是
  * 删之前的样子。这里轮询到 `installed` 真的落成 false 再收手，然后刷代理池
- * —— 池里那一批订阅节点要跟着变成「未分配端口」（只刷内核状态的话，地址列
+ * —— 池里那一批订阅节点要跟着丢掉监听端口（只刷内核状态的话，地址列
  * 会停在旧端口上，看着像还能用）。
  */
 export async function removeKernel(): Promise<void> {
@@ -598,7 +598,7 @@ export async function removeKernel(): Promise<void> {
   const version = kernel()?.version
   const ok = await window.wbConfirm?.ask?.({
     title: t('删除内核'),
-    html: t('确定删除已下载的内核{version}？内核文件与端口映射会被移除，订阅节点会变成「未分配端口」，引用它们的账号会暂时回退直连；订阅本身保留，重新下载内核后会重新分配端口。', {
+    html: t('确定删除已下载的内核{version}？内核文件与端口映射会被移除，订阅节点会失去监听端口（地址列显示「端口准备中」），引用它们的账号会暂时回退直连；订阅本身保留，重新下载内核后会重新分配端口。', {
       version: version ? `（${version}）` : '',
     }),
     okText: t('删除内核'),

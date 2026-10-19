@@ -20,12 +20,24 @@
  */
 
 import { t } from '../i18n'
-import { shared, type PoolItem } from './accounts-shared'
+import { setKernelInstalled, shared, type PoolItem } from './accounts-shared'
+
+/**
+ * 池列表响应里本模块关心的部分：条目 + 内核安装状态。
+ *
+ * `kernelInstalled` 由后端在池列表里一起带出来（账号页下拉拿不到订阅接口的
+ * 快照，只能从这里取）—— 它决定「没有端口的订阅节点」该说成「内核未安装」
+ * 还是「未被使用」。
+ */
+type ProxyPoolData = {
+  items: PoolItem[]
+  kernelInstalled?: boolean
+}
 
 /** 已缓存的池列表（`null` = 还没读过）；下拉首帧用它避免先空一拍 */
 let poolCache: PoolItem[] | null = null
 /** 在途读取（并发调用合并成一次） */
-let poolInflight: Promise<PoolItem[]> | null = null
+let poolInflight: Promise<ProxyPoolData> | null = null
 /** 写操作的版本号：`acceptProxyPool` 每写一次 +1（用于「在途读到的旧响应别覆盖新列表」） */
 let writeSeq = 0
 /** 读取失败的原因（成功后清空）—— 代理列据此显示「读取失败」的说明项 */
@@ -108,9 +120,10 @@ export function invalidateProxyPoolCache(): void {
  * 内容与上次通知过的等价时不发通知（签名见 `signatureOf`）：内核重建期间
  * 那一串轮询只有最后一两轮真的改了什么。
  */
-export function acceptProxyPool(items: PoolItem[] | null | undefined): void {
+export function acceptProxyPool(items: PoolItem[] | null | undefined, installed?: boolean | null): void {
   if (!Array.isArray(items)) return
   poolCache = items
+  if (typeof installed === 'boolean') setKernelInstalled(installed)
   writeSeq += 1
   lastPoolError = null
   retryAt = 0
@@ -130,25 +143,28 @@ export async function proxyPoolOptions(options: { force?: boolean } = {}): Promi
   // 发请求那一刻的写版本号：回来时若已经被写操作推进过，说明手上这份响应更旧
   const seqAtStart = writeSeq
   if (!poolInflight) {
-    poolInflight = (async () => {
+    poolInflight = (async (): Promise<ProxyPoolData> => {
       try {
         const data = await shared().workbuddyDesktop?.getProxyPool?.()
         if (!data || typeof data !== 'object' || !Array.isArray(data.items)) {
           throw new Error(t('代理池响应异常（{type}）', { type: typeof data }))
         }
-        return data.items
+        // 校验过 items 是数组，这里把它收窄成必填 —— 下游不必再判一次
+        return { items: data.items, kernelInstalled: data.kernelInstalled }
       } finally {
         poolInflight = null
       }
     })()
   }
-  const items = await poolInflight
+  const data = await poolInflight
+  const items = data.items
   // 在途期间可能有写操作已经 accept 了更新的列表（网络代理页刚删了一条）：
   // 那份比这次读到的旧响应新，不能被覆盖回去
   const fresh = writeSeq === seqAtStart || poolCache === null
   lastPoolError = null
   if (!fresh && poolCache) return poolCache
   poolCache = items
+  if (typeof data.kernelInstalled === 'boolean') setKernelInstalled(data.kernelInstalled)
   // 真读到了就通知：弹窗里点「重新读取」、切页兜底重读，都会让背后的账号表格
   // 跟着换掉下拉选项（它读的是同步快照，没有通知就看不到新数据）
   if (!unchanged(items)) {

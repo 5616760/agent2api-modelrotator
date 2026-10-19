@@ -57,12 +57,14 @@ import {
   applyUnits,
   cancelLanRegister,
   clearDegrade,
+  closePasswordDialog,
   confirmDbRestore,
   dropLastRetryCode,
   exportAccounts,
   exportDatabase,
   importAccounts,
   load,
+  openPasswordDialog,
   panelLogout,
   refreshDebug,
   refreshDeveloperRoleCompat,
@@ -114,6 +116,7 @@ import {
   selectCategory,
   showCategory,
   submitLanRegister,
+  submitPasswordChange,
   toggleDbIncludeLogs,
   toggleLan,
   toggleLanPanel,
@@ -1692,20 +1695,9 @@ function SecurityPane({ snap }: { snap: SettingsSnapshot }) {
         </div>
       </section>
 
-      <section className='panel'>
-        <PanelHead title={t('机器人校验')} />
-        <div className='panel-body'>
-          <SwitchRow
-            id='settings-captcha'
-            label={t('登录 / 注册需要通过 ALTCHA 人机验证（工作量证明）')}
-            checked={snap.captcha.enabled}
-            disabled={!snap.captcha.available || snap.busy === 'captcha'}
-            onCheckedChange={next => void saveCaptcha(next)}
-          />
-          <div className='hint'>{NOTES.captcha}</div>
-        </div>
-      </section>
-
+      {/* 机器人校验搬到「账户」分类（与管理员账号、登录开关同层）。
+          这里保留「退出登录」—— 它属于「当前这一端的会话」，与安全分类的
+          其它项（跨域、脱敏）不是一类。 */}
       {/* 面板登录：仅网页端（桌面壳的面板跟着应用走，没有「登录面板」的概念） */}
       {snap.panelLogin ? (
         <section className='panel' id='panel-login-section'>
@@ -1748,6 +1740,112 @@ function storageBadge(state: StorageState): React.ReactNode {
   return <StatusBadge tone={state.available ? 'ok' : 'bad'}>
     {state.available ? t('已生效') : t('数据库不可用')}
   </StatusBadge>
+}
+
+/**
+ * 「账户」分类：管理员账号（改密码）、机器人校验（两端各一张开关）、重置说明。
+ *
+ * ── 为什么登录开关做成只读 ────────────────────────────────────
+ * 「是否要求登录」由「库里有没有管理员」决定（见 `access::panel_auth_enabled`），
+ * 不是一个独立开关。做成可拨的话，用户关掉它就是在删除管理员记录 —— 那与
+ * 「重置管理员」是同一个动作，只是换了名字，却会让人以为「只是暂时关掉」。
+ * 所以这里只显示状态，要关就按下面的重置说明走，语义清楚、后果可见。
+ */
+function AccountPane({ snap }: { snap: SettingsSnapshot }) {
+  const account = snap.account
+  const captcha = snap.captcha
+  const switchDisabled = !captcha.available || snap.busy === 'captcha'
+  // 本进程是哪一端：用于给两张开关加「正在使用」标记
+  const here = captcha.localPanel ? 'desktop' : 'web'
+
+  return (
+    <>
+      <section className='panel'>
+        <PanelHead
+          title={t('管理员账号')}
+          badge={
+            account.status === 'loading'
+              ? <StatusBadge tone='idle'>{t('检测中…')}</StatusBadge>
+              : account.status === 'unavailable'
+                ? <StatusBadge tone='bad'>{t('不可用')}</StatusBadge>
+                : account.registered
+                  ? <StatusBadge tone='ok'>{t('已启用登录')}</StatusBadge>
+                  : <StatusBadge tone='idle'>{t('未注册')}</StatusBadge>
+          }
+          actions={
+            account.registered ? (
+              <Button
+                id='btn-account-change-password'
+                variant='outline'
+                onClick={() => openPasswordDialog()}
+              >
+                {t('修改密码')}
+              </Button>
+            ) : null
+          }
+        />
+        <div className='panel-body'>
+          <div className='settings-state' id='account-username'>
+            {account.status === 'unavailable'
+              ? t('未能读取账户信息，请稍后重试')
+              : account.registered
+                ? t('当前管理员：{name}', { name: account.username || '—' })
+                : t('尚未注册管理员：管理接口不需要登录。开启「允许局域网访问」时会引导注册，也可以从登录页注册。')}
+          </div>
+          {account.registered ? (
+            <div className='hint'>
+              {t('修改密码需要输入当前密码；修改成功后，其他设备 / 浏览器上的登录会立即失效，当前这条会话保留。')}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className='panel'>
+        <PanelHead
+          title={t('机器人校验')}
+          tip={TIPS.captchaSides}
+          badge={!captcha.available
+            ? <StatusBadge tone='bad'>{t('不可用')}</StatusBadge>
+            : null}
+        />
+        <div className='panel-body'>
+          <div className='settings-switches'>
+            <SwitchRow
+              id='settings-captcha-desktop'
+              label={here === 'desktop'
+                ? t('桌面端：登录 / 注册需要 ALTCHA 人机验证（当前正在使用）')
+                : t('桌面端：登录 / 注册需要 ALTCHA 人机验证')}
+              checked={captcha.desktop}
+              disabled={switchDisabled}
+              onCheckedChange={next => void saveCaptcha('desktop', next)}
+            />
+            <SwitchRow
+              id='settings-captcha-web'
+              label={here === 'web'
+                ? t('网页端：登录 / 注册需要 ALTCHA 人机验证（当前正在使用）')
+                : t('网页端：登录 / 注册需要 ALTCHA 人机验证')}
+              checked={captcha.web}
+              disabled={switchDisabled}
+              onCheckedChange={next => void saveCaptcha('web', next)}
+            />
+          </div>
+          <div className='hint'>{NOTES.captcha}</div>
+        </div>
+      </section>
+
+      <section className='panel'>
+        <PanelHead title={t('重置管理员')} />
+        <div className='panel-body'>
+          <div className='hint'>
+            {t('忘记密码时无法在界面里找回：需要停掉程序后，从数据库删除管理员记录（kv 表的 panelAdmin 键），重启后按首次使用重新注册。具体命令与各形态的库文件路径见 docs 目录下的「重置管理员」文档。')}
+          </div>
+          <div className='danger-zone'>
+            <strong>{t('重置会清空管理员账号与密码，面板将回到「未注册」状态。')}</strong>
+          </div>
+        </div>
+      </section>
+    </>
+  )
 }
 
 function DataPane({ snap }: { snap: SettingsSnapshot }) {
@@ -2079,6 +2177,104 @@ const LAN_CONFIRM_COPY: Record<
 }
 
 /**
+ * 「修改密码」弹窗：当前密码 + 新密码 + 确认新密码。
+ *
+ * 三个字段都是**非受控**再取 ref 读值？不 —— 这里用受控 state：需要在提交前
+ * 比较「两次新密码是否一致」，而那一比发生在点击那一刻，读 ref 与读 state 等价，
+ * 但受控写法能让「两次不一致」的提示在输入时就消失（错误文案清空）。
+ * 焦点落在「取消」：改密码不该因为敲回车就提交（与危险操作确认框同一取向）。
+ */
+function PasswordDialog({ password }: { password: { busy: boolean; error: string } | null }) {
+  const cancelRef = React.useRef<HTMLButtonElement | null>(null)
+  const [oldValue, setOldValue] = React.useState('')
+  const [newValue, setNewValue] = React.useState('')
+  const [repeat, setRepeat] = React.useState('')
+  const open = password !== null
+  const busy = password?.busy === true
+
+  // 关窗即清空三个输入：密码不该留在组件的 state 里等下一次打开
+  React.useEffect(() => {
+    if (!open) {
+      setOldValue('')
+      setNewValue('')
+      setRepeat('')
+    }
+  }, [open])
+
+  const mismatch = repeat.length > 0 && newValue !== repeat
+
+  function submit(): void {
+    if (busy) return
+    if (mismatch) return
+    void submitPasswordChange(oldValue, newValue)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={next => { if (!next) closePasswordDialog() }}>
+      <DialogContent className='w-[min(440px,calc(100vw-48px))]' initialFocus={cancelRef}>
+        <DialogHeader>
+          <DialogTitle>{t('修改密码')}</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          {/* form 让浏览器的密码管理器能识别「旧密码 → 新密码」这一组 */}
+          <form
+            onSubmit={event => { event.preventDefault(); submit() }}
+            autoComplete='on'
+          >
+            <Label htmlFor='account-old-password' className='mb-[5px] block text-[12.5px]'>
+              {t('当前密码')}
+            </Label>
+            <Input
+              id='account-old-password'
+              type='password'
+              autoComplete='current-password'
+              value={oldValue}
+              disabled={busy}
+              onChange={event => setOldValue(event.target.value)}
+            />
+            <Label htmlFor='account-new-password' className='mt-3.5 mb-[5px] block text-[12.5px]'>
+              {t('新密码')}
+            </Label>
+            <Input
+              id='account-new-password'
+              type='password'
+              autoComplete='new-password'
+              placeholder={t('至少 8 位')}
+              value={newValue}
+              disabled={busy}
+              onChange={event => setNewValue(event.target.value)}
+            />
+            <Label htmlFor='account-repeat-password' className='mt-3.5 mb-[5px] block text-[12.5px]'>
+              {t('确认新密码')}
+            </Label>
+            <Input
+              id='account-repeat-password'
+              type='password'
+              autoComplete='new-password'
+              value={repeat}
+              disabled={busy}
+              onChange={event => setRepeat(event.target.value)}
+            />
+          </form>
+          <div className='mt-3 min-h-5 text-[13px] whitespace-pre-wrap text-destructive'>
+            {mismatch ? t('两次输入的新密码不一致') : (password?.error || '')}
+          </div>
+        </DialogBody>
+        <DialogFooter>
+          <div className='mr-auto' />
+          <Button ref={cancelRef} variant='outline' onClick={() => closePasswordDialog()} disabled={busy}>
+            {t('取消')}
+          </Button>
+          <Button onClick={submit} disabled={busy || mismatch || !oldValue || !newValue || !repeat}>
+            {busy ? t('正在修改…') : t('修改密码')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
  * 「恢复整库备份」的确认弹窗（骨架照 RetentionConfirmDialog）。
  *
  * 恢复是**替换**语义：本机的账号、配置、日志、面板登录态会整体换成备份文件
@@ -2297,6 +2493,9 @@ function SettingsPage() {
         <div className={paneClass('security')} data-cat='security'>
           <SecurityPane snap={snap} />
         </div>
+        <div className={paneClass('account')} data-cat='account'>
+          <AccountPane snap={snap} />
+        </div>
         <div className={paneClass('data')} data-cat='data'>
           <DataPane snap={snap} />
         </div>
@@ -2324,6 +2523,7 @@ function SettingsPage() {
 
       <RetentionConfirmDialog confirm={snap.retentionConfirm} />
       <DbBackupConfirmDialog confirm={snap.dbBackupConfirm} />
+      <PasswordDialog password={snap.account.password} />
       <LanDialog confirm={snap.lanConfirm} register={snap.lanRegister} />
     </div>
   )

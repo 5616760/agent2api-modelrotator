@@ -1768,10 +1768,45 @@ pub fn shim_js() -> &'static str {
       return Promise.resolve(headers);
     },
 
-    // ── 机器人校验开关（登录 / 注册的 ALTCHA proof-of-work）──
+    // ── 机器人校验开关（登录 / 注册的 ALTCHA proof-of-work，分两端）──
+    // 与桌面 bridge 的同名方法逐字同形：patch 是 `{captchaDesktop?, captchaWeb?}`
+    // （部分更新）；旧签名传布尔值时按「两端一起改」处理（旧界面的调用形态）。
     getCaptchaSetting: function () { return call('GET', '/api/captcha'); },
-    saveCaptchaSetting: function (on) {
-      return call('PUT', '/api/captcha', { captchaEnabled: on === true });
+    saveCaptchaSetting: function (patch) {
+      return call(
+        'PUT',
+        '/api/captcha',
+        typeof patch === 'boolean' ? { captchaEnabled: patch } : (patch || {})
+      );
+    },
+
+    // ── 面板会话（网页端由浏览器自己的 cookie / localStorage 承担）──
+    // 桌面壳这三个方法服务「窗口在 tauri:// 下加载登录页、令牌交给壳保管」这条
+    // 通道；浏览器里同源 cookie 已经够用，这里只给出与桌面同形的结果，避免
+    // 界面分端判断。
+    panelSessionStatus: function () {
+      return call('GET', '/api/panel/status').then(function (state) {
+        if (!state || state.registered !== true) return { registered: false, authenticated: false };
+        return call('GET', '/api/session').then(
+          function () { return { registered: true, authenticated: true }; },
+          function () {
+            return call('GET', '/api/panel/status').then(function () {
+              return { registered: true, authenticated: false };
+            }, function () { return { registered: true, authenticated: false }; });
+          }
+        );
+      });
+    },
+    panelSessionStore: function () { return Promise.resolve({ saved: true }); },
+    panelSessionClear: function () { return Promise.resolve({ cleared: true }); },
+
+    // ── 面板账户（设置页「账户」分类）──
+    getPanelAccount: function () { return call('GET', '/api/panel/account'); },
+    changePanelPassword: function (oldPassword, newPassword) {
+      return call('POST', '/api/panel/change-password', {
+        oldPassword: String(oldPassword || ''),
+        newPassword: String(newPassword || ''),
+      });
     },
 
     // ── models.dev 模型元数据（能力位与逐模型思考档位）──

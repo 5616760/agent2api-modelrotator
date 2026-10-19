@@ -177,7 +177,9 @@ pub async fn get_system_info(
             "autoContinue": config::auto_continue(),
             "autoContinueMaxRounds": config::auto_continue_max_rounds(),
             "modelsDev": config::models_dev_enabled(),
-            "captchaEnabled": snapshot.captcha_enabled(),
+            // 报当前这一端的开关（桌面壳 / headless 各读各的），与 /api/captcha
+            // 的两个分端字段同源；旧前端只认这个布尔值，保持行为不变
+            "captchaEnabled": snapshot.captcha_enabled(state.local_panel),
             "updateBeta": config::update_beta(),
         },
         "stats": {

@@ -41,6 +41,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use axum::http::HeaderMap;
 
 use crate::server::db::Db;
+use crate::server::logging;
 
 /// 会话 cookie 名：**一枚装两段**（`agent2api-panel=<access>.<refresh>`）。
 ///
@@ -139,10 +140,18 @@ fn sha256_hex(value: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-// ── 管理员（环境变量优先，其次库里的注册记录）────────────────
-
+// ── 管理员（库是唯一真相；环境变量只在首次播种）────────────────
+//
+// 语义与 sub2api / new-api 一致：`AGENT2API_ADMIN_USER` + 密码只在**库中还没有
+// 管理员**时作为种子写入 `kv.panelAdmin`，此后所有校验都只读库 —— 面板里改的
+// 密码立即生效，环境变量改回旧值不会把密码「改回去」。
+//
+// 旧实现是「环境变量一直优先」（`verify_login` 先试 env、`sync_env_admin_to_store`
+// 每次启动覆盖式写入）。后果是配了 env 的部署在面板里永远改不掉密码：新哈希写进
+// 库，登录却仍拿 env 那份比对。改成播种后这两个症状一起消失。
 static ENV_ADMIN: OnceLock<Option<(String, String)>> = OnceLock::new();
 
+/// 环境变量里的种子管理员（仅用于首次播种，**不参与登录校验**）。
 fn env_admin() -> Option<&'static (String, String)> {
     // OnceLock<Option<(String, String)>>：首次调用时读入，此后返回静态引用。
     // 密码有两个变量：HASH（已是 bcrypt 哈希）优先；PASSWORD（明文）则
@@ -256,10 +265,99 @@ pub fn setup_admin(username: &str, password_hash: &str) -> Result<bool, String> 
     Ok(changed > 0)
 }
 
-/// 环境变量预置的管理员同步进库（`kv` 的 `panelAdmin`，与面板注册同一处）：
-/// env_admin() 里明文已转成 bcrypt 哈希，落库的自然也是哈希 —— 数据库的
-/// 任何角落都不会出现明文密码。env 是显式的部署意图，覆盖式写入（改了
-/// env 重启即生效）；没配 env 则什么都不做，走面板注册路径。
+/// 面板当前登录的管理员用户名（未注册返回 None）。
+pub fn admin_username() -> Option<String> {
+    store_admin().map(|(username, _)| username)
+}
+
+/// 改密码：校验旧密码 → 写入新哈希 → **撤销除当前会话外的所有会话链**。
+///
+/// 撤销其余会话的理由与常见做法一致：改密码通常意味着「旧密码可能泄露」，
+/// 只改哈希却留着别处的活会话，等于泄露的会话还能用 30 天（refresh 寿命）。
+/// 当前这条会话保留 —— 用户刚在界面上完成操作，立刻把他自己踢下线是坏体验
+/// （也容易让人以为改密码失败了）。
+///
+/// 返回 `Ok(true)` = 已改；`Ok(false)` = 旧密码不对；`Err` = 存储/加密失败。
+pub fn change_password(
+    headers: &HeaderMap,
+    old_password: &str,
+    new_password_hash: &str,
+) -> Result<bool, String> {
+    let Some((username, _)) = store_admin() else {
+        return Err("尚未注册管理员账号".to_string());
+    };
+    if !verify_login(&username, old_password) {
+        return Ok(false);
+    }
+    let Some(db) = db() else {
+        return Err("数据库不可用，无法保存新密码".to_string());
+    };
+    let payload = serde_json::json!({ "username": username, "hash": new_password_hash });
+    db.with_mut(|conn| {
+        conn.execute(
+            "INSERT INTO kv (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![KV_ADMIN_KEY, payload.to_string()],
+        )
+    })
+    .and_then(|result| result.ok())
+    .filter(|changed| *changed > 0)
+    .ok_or_else(|| "写入新密码失败".to_string())?;
+
+    revoke_other_sessions(headers);
+    Ok(true)
+}
+
+/// 撤销**除请求里这条之外**的所有会话链（改密码用）。
+///
+/// 「当前会话」按请求里的 access 候选定位：命中的那条 access 记录带着 session
+/// id，其余链全部作废。定位不到（请求只带了 refresh、或 access 恰好过期）时
+/// 退化为「全撤销」—— 宁可多踢一次，也不留一条来历不明的活会话。
+fn revoke_other_sessions(headers: &HeaderMap) {
+    let current_session = {
+        let table = match access_tokens().lock() {
+            Ok(table) => table,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        access_candidates(headers)
+            .iter()
+            .find_map(|token| table.get(&sha256_hex(token)).map(|(session, _)| session.clone()))
+    };
+
+    {
+        let mut table = match refresh_tokens().lock() {
+            Ok(table) => table,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match &current_session {
+            Some(session) => table.retain(|record| record.session == *session),
+            None => table.clear(),
+        }
+        persist_refresh_tokens(&mut table);
+    }
+    {
+        let mut table = match access_tokens().lock() {
+            Ok(table) => table,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match &current_session {
+            Some(session) => table.retain(|_, (session_of, _)| session_of == session),
+            None => table.clear(),
+        }
+        persist_access_tokens(&mut table);
+    }
+}
+
+/// 环境变量预置的管理员**首次播种**进库（`kv` 的 `panelAdmin`）。
+///
+/// 只在库里**还没有**管理员时写入（`ON CONFLICT DO NOTHING`）：
+///   · 首次部署 → 用 env 的账号密码建立管理员，之后面板登录就能用；
+///   · 之后每次启动 → 库里已有记录，env 被忽略 —— 用户在面板里改的密码
+///     不会被环境的旧值覆盖回去；
+///   · 想改凭据 → 在面板「设置 → 账户」改密码，或删掉 `panelAdmin` 重新注册。
+///
+/// env_admin() 里明文已转成 bcrypt 哈希，落库的自然是哈希 —— 数据库的任何角落
+/// 都不会出现明文密码。没配 env 则什么都不做，走面板注册路径。
 /// 启动时（`attach_db` 之后）调用一次。
 pub fn sync_env_admin_to_store() {
     let Some((user, hash)) = env_admin() else {
@@ -269,13 +367,22 @@ pub fn sync_env_admin_to_store() {
         return;
     };
     let payload = serde_json::json!({ "username": user, "hash": hash });
-    let _ = db.with_mut(|conn| {
-        conn.execute(
-            "INSERT INTO kv (key, value) VALUES (?1, ?2)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            rusqlite::params![KV_ADMIN_KEY, payload.to_string()],
-        )
-    });
+    let changed = db
+        .with_mut(|conn| {
+            conn.execute(
+                "INSERT INTO kv (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO NOTHING",
+                rusqlite::params![KV_ADMIN_KEY, payload.to_string()],
+            )
+        })
+        .and_then(|result| result.ok())
+        .unwrap_or(0);
+    if changed > 0 {
+        logging::log(
+            "[Security]",
+            "✅ 已用环境变量播种面板管理员（此后以库为准，改密码请用设置页）",
+        );
+    }
 }
 
 /// 校验账号密码。bcrypt 哈希兼容 `htpasswd -nBC` 的输出格式。
@@ -285,11 +392,9 @@ fn verify_credentials(username: &str, password: &str, expected: &(String, String
     user_ok && pass_ok
 }
 
-/// 按面板提交的凭证找管理员并校验（环境变量优先，其次库里的注册记录）。
+/// 按面板提交的凭证校验管理员（**只读库** —— 环境变量仅在首次播种时参与，
+/// 理由见 `sync_env_admin_to_store`）。
 pub fn verify_login(username: &str, password: &str) -> bool {
-    if let Some(expected) = env_admin() {
-        return verify_credentials(username, password, expected);
-    }
     store_admin().is_some_and(|expected| verify_credentials(username, password, &expected))
 }
 

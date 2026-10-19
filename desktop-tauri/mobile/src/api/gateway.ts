@@ -487,13 +487,18 @@ export type PoolItem = {
   port?: number
   address?: string
   lastTest?: { at?: number; success?: boolean; ip?: string; error?: string } | null
-  usedBy?: number
+  /** 引用它的账号（后端带的是**数组**，桌面端同一字段也是这个形状） */
+  usedBy?: Array<{ id?: string; name?: string; enabled?: boolean }>
+  /** 孤儿订阅节点：所属订阅已不存在（后端标注） */
+  orphan?: boolean
   [key: string]: unknown
 }
 
 export type PoolPayload = {
   items?: PoolItem[]
   clash?: { available?: boolean; error?: string | null; options?: unknown[] }
+  /** 内核装没装：订阅节点没有端口时的首要成因（没内核就没有监听器） */
+  kernelInstalled?: boolean
 }
 
 export function fetchProxyPool(signal?: AbortSignal): Promise<PoolPayload> {
