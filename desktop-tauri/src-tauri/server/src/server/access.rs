@@ -94,6 +94,11 @@ const LEGACY_REFRESH_COOKIE: &str = "agent2api-panel-rt";
 const ACCESS_TTL: Duration = Duration::from_secs(2 * 3600);
 /// refresh token 有效期（长效）
 const REFRESH_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
+/// 并发轮换的宽限窗：一把 refresh 被合法轮换后的这段时间里，同一把再上来
+/// 按「同一台浏览器的并发续期」处理（见 `rotate_session` 的宽限分支），
+/// 窗外照旧判重放、整链作废。一分钟足够覆盖多标签页同时撞上 access 过期的
+/// 现场（客户端单飞只合并得了同一页面上下文内的并发）。
+const ROTATION_GRACE_MS: i64 = 60_000;
 /// 登录失败锁定：同一来源连续失败 5 次，锁 5 分钟（按 IP 不是全局 ——
 /// 全局锁会把「攻击者锁死管理员」变成一种攻击，Tinyauth 那个 CVE 的教训）
 const LOCKOUT_THRESHOLD: u32 = 5;
@@ -370,6 +375,12 @@ struct RefreshRecord {
     expires_at: i64,
     /// 已被轮换（旧令牌不能再换；再次出现 = 泄露，整链作废）
     rotated: bool,
+    /// 轮换发生时刻（毫秒；0 = 从未轮换）。并发续期的宽限判据要用它
+    /// （见 `rotate_session`）。`#[serde(default)]`：升级前落库的记录没有
+    /// 这个字段，反序列化按「从未轮换」处理 —— 旧记录一旦已轮换就永远在
+    /// 宽限窗之外，重放判据与旧版一致。
+    #[serde(default)]
+    rotated_at: i64,
 }
 
 static REFRESH_TOKENS: OnceLock<Mutex<Vec<RefreshRecord>>> = OnceLock::new();
@@ -553,6 +564,7 @@ impl IssuedSession {
                     session,
                     expires_at: now_ms() + REFRESH_TTL.as_millis() as i64,
                     rotated: false,
+                    rotated_at: 0,
                 });
                 persist_refresh_tokens(&mut table);
             }
@@ -563,6 +575,7 @@ impl IssuedSession {
                     session,
                     expires_at: now_ms() + REFRESH_TTL.as_millis() as i64,
                     rotated: false,
+                    rotated_at: 0,
                 });
                 persist_refresh_tokens(&mut table);
             }
@@ -769,6 +782,13 @@ pub fn access_fingerprints(headers: &HeaderMap) -> Vec<String> {
 /// 命中了一条已轮换记录，说明它泄露了（活链上新令牌在浏览器手里）—— 整条会话链
 /// 作废，逼着重新登录。之所以要先穷尽活候选：罐里同时躺着新旧两把是**正常现象**
 /// （合并型中转就是这么留脏的），把"读到了旧的那把"当成泄露会把好环境踢成反复重登。
+///
+/// 已轮换记录有一条**宽限**（`ROTATION_GRACE_MS`）：宽限窗内刚被轮换的令牌再
+/// 上来，按「同一台浏览器的并发续期」处理而不是泄露 —— access 过期那一刻，
+/// 多枚标签页 / 多个页面上下文会带着**同一把**还没轮换的 refresh 同时来换，
+/// 先到的成功、后到的就会撞上「已轮换」；这是正常现场，不是攻击。客户端的
+/// 单飞去重只合并得了同一页面上下文内的并发，跨标签页的只能在服务端兜
+/// （见 `rotate_session` 宽限分支）。窗外的重放照旧整链作废。
 pub fn rotate_session(headers: &HeaderMap) -> Option<IssuedSession> {
     let candidates = refresh_candidates(headers);
     if candidates.is_empty() {
@@ -789,6 +809,7 @@ pub fn rotate_session(headers: &HeaderMap) -> Option<IssuedSession> {
     if let Some(index) = live {
         let session = table[index].session.clone();
         table[index].rotated = true;
+        table[index].rotated_at = now;
         drop(table);
         return Some(IssuedSession::issue(session));
     }
@@ -803,6 +824,23 @@ pub fn rotate_session(headers: &HeaderMap) -> Option<IssuedSession> {
     // 按「刷新失败」处理，不动任何链。
     let index = replay?;
     let session = table[index].session.clone();
+    // ── 并发轮换的宽限分支 ─────────────────────────────────────
+    // 这把 refresh 在宽限窗内刚被合法轮换、且链上还有活记录 → 判良性：从链上
+    // 现存的活记录再签发一组新令牌给这个后来者。**不动**那条活记录 —— 它属于
+    // 先到的那次轮换，动它等于把「先到者拿着的新 refresh」作废掉。宽限窗外
+    // （或链上已无活记录，例如登出 / 别处已判过重放）照旧整链作废。
+    // 代价：偷来的令牌在「合法用户轮换后的一分钟」内也能换出新令牌 —— 窗只有
+    // 一分钟，且令牌在那之前本就有效，泄露窗口没有实质扩大。
+    if now - table[index].rotated_at <= ROTATION_GRACE_MS {
+        if let Some(live) = table
+            .iter()
+            .find(|record| record.session == session && !record.rotated)
+        {
+            let session = live.session.clone();
+            drop(table);
+            return Some(IssuedSession::issue(session));
+        }
+    }
     table.retain(|record| record.session != session);
     persist_refresh_tokens(&mut table);
     drop(table);
@@ -1295,17 +1333,38 @@ mod credential_candidate_tests {
         assert!(rotate_session(&request(&session_cookie(&third), &[])).is_some());
     }
 
-    /// 重放检测没被削弱：只拿**已轮换**的旧令牌来换（没有一把活的在场），
-    /// 仍是整条会话链作废。
+    /// 重放检测没被削弱：宽限窗**外**只拿已轮换的旧令牌来换（没有一把活的
+    /// 在场），仍是整条会话链作废；窗内的同一行为则是良性并发续期（多标签页
+    /// 同时撞上 access 过期的正常现场，见 `rotate_session` 的宽限分支）。
     #[test]
     fn a_replayed_refresh_alone_still_kills_its_chain() {
         let first = IssuedSession::new_session();
         let second = rotate_session(&request(&refresh_only_cookie(&first.refresh_token), &[]))
             .expect("首次轮换应成功");
 
-        // 旧令牌单独上行 → 判重放，None
+        // 宽限窗内旧令牌单独上行 = 并发续期：照常签发，且不杀链
+        let concurrent = rotate_session(&request(&refresh_only_cookie(&first.refresh_token), &[]))
+            .expect("宽限窗内的重复 refresh 该按并发续期签发新令牌");
+        assert!(
+            session_valid(&request(&session_cookie(&concurrent), &[])),
+            "宽限续期签发的新 access 要有效"
+        );
+        assert!(
+            rotate_session(&request(&session_cookie(&second), &[])).is_some(),
+            "宽限续期不许动链上原有的活 refresh"
+        );
+
+        // 把已轮换记录拨到宽限窗之外 → 同一把旧令牌再上来就是泄露：整链作废
+        {
+            let mut table = refresh_tokens().lock().unwrap();
+            for record in table.iter_mut() {
+                if record.rotated {
+                    record.rotated_at = now_ms() - ROTATION_GRACE_MS - 1;
+                }
+            }
+        }
         let replayed = rotate_session(&request(&refresh_only_cookie(&first.refresh_token), &[]));
-        assert!(replayed.is_none(), "已轮换令牌单独来换必须判重放");
+        assert!(replayed.is_none(), "宽限窗外的已轮换令牌必须判重放");
 
         // 同链的**活**令牌也应随之作废（整链撤销）—— 这一条才是「整链」二字的意思
         assert!(

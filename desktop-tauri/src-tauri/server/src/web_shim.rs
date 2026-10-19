@@ -449,7 +449,20 @@ pub fn shim_js() -> &'static str {
   // **显式覆盖**（见 `api::panel::tokens_in_body`），所以不发标记时它会自己按
   // 探针 cookie 判：直连 → 仍走 cookie（响应体无令牌）；中转 → 探针判不通，
   // 令牌照样进响应体。两侧行为都不比原来差，只有直连侧少暴露一份凭据。
+  // ── 并发 401 的单飞 ───────────────────────────────────────
+  // access 过期那一刻，面板首屏一次会并发十几条 /api/*，它们同时收到 401、
+  // 同时带着同一把 refresh 来换 —— 各发各的话，先到的轮换成功，其余就撞上
+  // 「已轮换」判定。服务端对一分钟内的情况有宽限（access::ROTATION_GRACE_MS），
+  // 但那只兜跨页面上下文的场（多标签页）；同一页面内的并发在这里合并掉：
+  // 同一时刻只放行一次轮换请求，其余的等同一个结果再各自动重试。
+  var refreshInFlight = null;
   async function tryRefresh() {
+    if (refreshInFlight) return refreshInFlight;
+    refreshInFlight = doRefresh().finally(function () { refreshInFlight = null; });
+    return refreshInFlight;
+  }
+
+  async function doRefresh() {
     try {
       var headers = { 'Accept': 'application/json' };
       var refreshToken = storedPanelToken('refresh');

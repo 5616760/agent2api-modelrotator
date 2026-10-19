@@ -119,8 +119,25 @@ function buildHeaders(extra?: Record<string, string>): Record<string, string> {
   return headers
 }
 
-/** 静默续期。成功返回 true */
+/** 在飞的续期请求：同一时刻最多一个，其余 401 等它（见 tryRefresh） */
+let refreshInFlight: Promise<boolean> | null = null
+
+/**
+ * 静默续期，并发 401 单飞：access 过期那一刻页面会同时收到多个 401，
+ * 各自去换的话，后到的带着同一把（刚被轮换的）refresh 上行，只能靠服务端
+ * 的宽限窗兜底（`access::ROTATION_GRACE_MS`）。这里同一时刻只放行一次轮换
+ * 请求，其余等同一个结果 —— 先到者换到的新令牌直接被所有等待者共用。
+ * 成功返回 true
+ */
 async function tryRefresh(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight
+  refreshInFlight = doRefresh().finally(() => {
+    refreshInFlight = null
+  })
+  return refreshInFlight
+}
+
+async function doRefresh(): Promise<boolean> {
   const auth = readPanelAuth()
   const headers = buildHeaders()
   if (auth?.refresh) {
