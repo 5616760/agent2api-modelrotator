@@ -388,12 +388,12 @@ pub fn resolve_for_request(payload: &mut Value, headers: &HeaderMap) -> Option<R
     Some(target)
 }
 
-/// 转发层失败回调（失败转移写侧）：某成员命中失败状态码时登记冷却。
+/// 转发层结果回调（失败转移写侧）：某成员命中失败状态码时登记冷却。
 ///
-/// 集成点：`upstream` 转发在收到终态响应后调用本函数。传入虚拟组名 `group` 与
-/// 本次实际使用的 `provider:model`；命中 `fail_statuses` 才冷却。
-/// （chat.rs 主链路暂未自动接此回调——见该文件钩子处的说明；手动刷新 /
-/// 清冷却仍可用。若需自动失败转移，在 `provider_loop` 判定终态后加一行调用即可。）
+/// 集成点：`api::chat` 在转发的三个终态出口（流式响应头就绪 / 非流式完成 /
+/// 转发报错）调用 [`report_target`]，间接进到本函数 —— 成功清掉该成员的冷却，
+/// 失败且状态码命中组配置的 `fail_statuses` 才冷却（Key 白名单拒绝这类 403
+/// 的网关自身判定不会误伤成员）。
 pub fn report_member_outcome(group: &str, member_key: &str, success: bool, status: i32) {
     if success {
         // 成功：清掉该成员的冷却，使其尽快回到可用池。
@@ -417,6 +417,16 @@ pub fn report_member_outcome(group: &str, member_key: &str, success: bool, statu
         .lock()
         .unwrap()
         .mark_limited(group, member_key, Some(until));
+}
+
+/// `api::chat` 便捷入口：直接拿 [`ResolvedTarget`] 上报（成员键按 `provider:model` 生成）。
+pub fn report_target(group: &str, target: &ResolvedTarget, success: bool, status: i32) {
+    report_member_outcome(
+        group,
+        &member_key(&target.provider, &target.model),
+        success,
+        status,
+    );
 }
 
 /// 手动切换：把某组窗口偏移 +1（切到下一个加权成员）。

@@ -124,9 +124,9 @@ pub async fn chat_completions(
     // ── 模型轮换（model-rotator 融合）──
     // 在目录校验 / 别名映射之前拦截：若请求的模型名是某个启用轮换组的虚拟名，
     // 原地改写为具体模型名，使后续 `pipeline::resolve_model` 的校验作用在真实模型上。
-    if let Some(target) =
-        crate::server::core::model_rotation::resolve_for_request(&mut payload, &headers)
-    {
+    let rotation_target =
+        crate::server::core::model_rotation::resolve_for_request(&mut payload, &headers);
+    if let Some(target) = &rotation_target {
         logging::verbose(
             "[ModelRotation]",
             &format!(
@@ -255,6 +255,16 @@ pub async fn chat_completions(
                 None => source,
             };
             let status = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
+            // ── 模型轮换：响应头已就绪 ⇒ 视为成功写侧（清冷却）。流中途断掉
+            // 按记账口径属另一列（见上面 status 的注释），不在这里回写。
+            if let Some(target) = &rotation_target {
+                crate::server::core::model_rotation::report_target(
+                    &client_model,
+                    target,
+                    true,
+                    i64::from(status.as_u16()) as i32,
+                );
+            }
             let context = RecordContext {
                 stats,
                 telemetry,
@@ -293,6 +303,15 @@ pub async fn chat_completions(
                 Some(context) => context.complete(body).await,
                 None => body,
             };
+            // ── 模型轮换：成功写侧（清冷却，让刚恢复的成员尽快回到轮换池）
+            if let Some(target) = &rotation_target {
+                crate::server::core::model_rotation::report_target(
+                    &client_model,
+                    target,
+                    true,
+                    200,
+                );
+            }
             // 响应正文在记账前抄一份（完整 JSON 文本；序列化失败或调试模式
             // 关着给 None，那一侧少存一份正文不影响明细）
             let raw_response = pipeline::capture_raw_json(&body);
@@ -327,6 +346,17 @@ pub async fn chat_completions(
             logging::console_line("[Model]", &format!("❌ {}", error.message));
             let status = i64::from(error.http_status().as_u16());
             let message = error.message.clone();
+            // ── 模型轮换：失败转移写侧（转发终态在此定稿）。是否冷却由
+            // `report_member_outcome` 按组配置的 fail_statuses 过滤 ——
+            // Key 白名单拒绝（403）这类网关自身判定不会误伤成员。
+            if let Some(target) = &rotation_target {
+                crate::server::core::model_rotation::report_target(
+                    &client_model,
+                    target,
+                    false,
+                    status as i32,
+                );
+            }
             record_entry(
                 &RecordContext {
                     stats,
